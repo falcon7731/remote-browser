@@ -1,1 +1,9 @@
 [2026-05-11 13:10:17] Wrote remote.log
+[2026-05-11 13:10:48] Read command: goto (id: 1778504955901-e0965rpv)
+[2026-05-11 13:10:48] 📩 Executing: goto (id: 1778504955901-e0965rpv)
+[2026-05-11 13:10:48] Navigating to https://www.youtube.com/
+[2026-05-11 13:10:50] Capturing post‑command state...
+[2026-05-11 13:10:50] Wrote page.html
+[2026-05-11 13:10:50] Wrote current_url.txt
+[2026-05-11 13:10:50] Wrote session.json
+[2026-05-11 13:10:50] Wrote command.json

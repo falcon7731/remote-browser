@@ -1,6 +1,84 @@
 {
-  "cookies": [],
-  "localStorage": {},
-  "lastUrl": "about:blank",
+  "cookies": [
+    {
+      "name": "GPS",
+      "value": "1",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1778506849.046264,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "YSC",
+      "value": "aD3a8Kt9Zko",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VISITOR_INFO1_LIVE",
+      "value": "lhP5vM2gKB0",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1794057049.046318,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VISITOR_PRIVACY_METADATA",
+      "value": "CgJVUxIEGgAgbA%3D%3D",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1794057049.046334,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "PREF",
+      "value": "tz=UTC",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1813065050.161997,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__Secure-YNID",
+      "value": "18.YT=0aZgc-D1wQjcVUiD8EZopH8YmMiIuYxk-PTpDeT1eJdUo_iTfc4_D9KP4gphhjPYjpfMk-xl-pHw7P0v0IbJgdp9bYsu9tmunHv7RS7i9gVUJDJRgTdT7v7PxrCHsXiJ_Dso9wm4QahTRKc1Xojcq2RZ8q6NhBUMkgOZ9MDbZHzXrRk1rFm1yZEd5hEPDhOsKvAPHNJ9BMBLLjQRwGJCke_A0yna7jZglpis5EC2qCZ_Two3nb6fZY1Pv-6TC4AfOUAWkWNhRN6W1BZLbZtIdQaFQCzMRy_od5eB39JGqMPzeKgb4BZbj4bY9xjtakrq734zi22QU_yb5RMJrm3eTA",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1794057048.305269,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://youtube.com",
+      "_crHasCrossSiteAncestor": false
+    },
+    {
+      "name": "__Secure-ROLLOUT_TOKEN",
+      "value": "CJi5y4Hmnp7WdhCv8bPNp7GUAxiJuoLOp7GUAw%3D%3D",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1794057050.305358,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://youtube.com",
+      "_crHasCrossSiteAncestor": false
+    }
+  ],
+  "localStorage": {
+    "ytidb::LAST_RESULT_ENTRY_KEY": "{\"data\":{\"hasSucceededOnce\":true},\"expiration\":1781097050013,\"creation\":1778505050013}",
+    "yt-icons-last-purged": "1775653849904"
+  },
+  "lastUrl": "https://www.youtube.com/",
   "scrollY": 0
 }
