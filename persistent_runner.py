@@ -42,7 +42,6 @@ def main():
     log("🚀 Starting persistent browser")
     subprocess.run(["git", "checkout", BRANCH], check=True)
     
-    # Load session
     session = {}
     if os.path.exists("session.json"):
         with open("session.json") as f:
@@ -63,7 +62,6 @@ def main():
                 page.evaluate("""(storage) => { for(let [k,v] of Object.entries(storage)) localStorage.setItem(k,v); }""", session["localStorage"])
             page.evaluate(f"window.scrollTo(0, {session.get('scrollY',0)})")
         
-        # Initial push
         page.screenshot(path="screenshot.png", full_page=True)
         write_file("page.html", page.content())
         write_file("clipboard.txt", "")
@@ -146,7 +144,6 @@ def main():
                         else:
                             raise ValueError(f"Unknown {action}")
                         
-                        # Post‑command capture
                         page.screenshot(path="screenshot.png", full_page=True)
                         write_file("page.html", page.content())
                         write_file("current_url.txt", page.url)
