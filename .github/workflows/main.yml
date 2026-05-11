@@ -15,7 +15,7 @@ permissions:
 jobs:
   browse:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(github.event.inputs.session_hours || 6) * 60 }}
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,9 +46,10 @@ jobs:
           BRANCH = "session"
           REPO = os.environ["REPO"]
           GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+          MAX_HOURS = float(os.environ.get("SESSION_HOURS", "6"))
+          START_TIME = time.time()
           
           def git_force_push_all():
-              """Add all changes, commit, and force push to session branch."""
               subprocess.run(["git", "add", "-A"], check=True)
               subprocess.run(["git", "commit", "-m", "Remote browser state update [skip ci]", "--allow-empty"], check=True)
               subprocess.run(["git", "push", "origin", BRANCH, "--force"], check=True)
@@ -56,8 +57,7 @@ jobs:
           def read_command():
               try:
                   with open("command.json", "r") as f:
-                      cmd = json.load(f)
-                      return cmd
+                      return json.load(f)
               except:
                   return {}
           
@@ -66,12 +66,10 @@ jobs:
                   f.write(content)
           
           def main():
-              print("🚀 Persistent browser (Python + git force-push)")
+              print(f"🚀 Persistent browser - max session: {MAX_HOURS} hours")
               
-              # Ensure we are on session branch
               subprocess.run(["git", "checkout", BRANCH], check=True)
               
-              # Load previous session if exists
               session = {}
               if os.path.exists("session.json"):
                   with open("session.json", "r") as f:
@@ -84,7 +82,6 @@ jobs:
                   context = browser.new_context(viewport={"width": 1280, "height": 720})
                   page = context.new_page()
                   
-                  # Restore cookies
                   if session.get("cookies"):
                       context.add_cookies(session["cookies"])
                   if session.get("lastUrl") and session["lastUrl"] != "about:blank":
@@ -93,7 +90,6 @@ jobs:
                           page.evaluate("""(storage) => { for (let [k,v] of Object.entries(storage)) localStorage.setItem(k, v); }""", session["localStorage"])
                       page.evaluate(f"window.scrollTo(0, {session.get('scrollY', 0)})")
                   
-                  # Initial push
                   page.screenshot(path="screenshot.png", full_page=True)
                   write_file("page.html", page.content())
                   write_file("clipboard.txt", "")
@@ -105,6 +101,10 @@ jobs:
                   heartbeat = 0
                   
                   while True:
+                      if time.time() - START_TIME > MAX_HOURS * 3600:
+                          print(f"Session time limit ({MAX_HOURS} hours) reached. Exiting.")
+                          break
+                      
                       heartbeat += 1
                       if heartbeat % 30 == 0:
                           print(f"💓 Heartbeat {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -176,24 +176,19 @@ jobs:
                                   else:
                                       raise ValueError(f"Unknown action: {action}")
                                   
-                                  # Capture new state
                                   page.screenshot(path="screenshot.png", full_page=True)
                                   write_file("page.html", page.content())
-                                  # Update session
                                   session["cookies"] = context.cookies()
                                   session["localStorage"] = page.evaluate("() => { let items={}; for(let i=0;i<localStorage.length;i++){let k=localStorage.key(i); items[k]=localStorage.getItem(k);} return items; }")
                                   session["lastUrl"] = page.url
                                   session["scrollY"] = page.evaluate("window.scrollY")
                                   write_file("session.json", json.dumps(session, indent=2))
-                                  # Results
                                   links = page.evaluate("() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href)")
                                   with open("results.md", "w") as f:
                                       f.write(f"# Command: {action}\n**Result:**\n{result}\n\n**URL:** {session['lastUrl']}\n\n## Links ({len(links)})\n")
                                       f.write("\n".join(f"- {l}" for l in links[:100]))
                                       f.write(f"\n\n![Screenshot](./screenshot.png)\n\n## Clipboard\n```\n{open('clipboard.txt').read()}\n```")
-                                  # Clear command
                                   write_file("command.json", "{}")
-                                  # Force push everything
                                   git_force_push_all()
                                   print("✅ Command executed and pushed")
                                   
@@ -215,3 +210,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          SESSION_HOURS: ${{ github.event.inputs.session_hours }}
