@@ -214,8 +214,4 @@ jobs:
         run: python persistent_runner.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-<<<<<<< HEAD
           REPO: ${{ github.repository }}
-=======
-          REPO: ${{ github.repository }}
->>>>>>> c586fa8deb1043cc4e60c93f10770963f27b6476
