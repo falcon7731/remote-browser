@@ -119,7 +119,8 @@ def main():
                         if action == "goto":
                             url = cmd["url"]
                             log(f"Navigating to {url}")
-                            page.goto(url, timeout=30000)
+                            page.goto(url, wait_until='networkidle', timeout=30000)
+                            page.wait_for_timeout(500)   # extra half‑second for lazy content
                             result = f"Navigated to {url}"
                         elif action == "screenshot":
                             page.screenshot(path="screenshot.png", full_page=True)

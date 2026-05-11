@@ -4,25 +4,19 @@ let GITHUB_REPO = "";
 let GITHUB_TOKEN = "";
 const BRANCH = "session";
 let API_BASE = "";
-let POLL_INTERVAL_MS = 3000;  // 3 seconds
+let POLL_INTERVAL_MS = 10000;  // 10 seconds – much gentler
 // ===================================
 
-let lastScreenshotSha = null;
+let lastScreenshotEtag = null;
+let lastUrlEtag = null;
 let lastClipboardText = "";
-let lastCommitSha = null;
 let pendingCommand = false;
 
-// Rate limit display debouncing
-let rateLimitDisplayTimeout = null;
-let lastKnownRemaining = null;
-
+// Rate limit display (now rarely changes)
 function updateTokenCounter(remaining) {
-    if (remaining === undefined) return;
-    if (rateLimitDisplayTimeout) clearTimeout(rateLimitDisplayTimeout);
-    lastKnownRemaining = remaining;
-    rateLimitDisplayTimeout = setTimeout(() => {
-        document.getElementById('tokenCounter').innerText = `API: ${lastKnownRemaining}/5000`;
-    }, 100);
+    if (remaining !== undefined) {
+        document.getElementById('tokenCounter').innerText = `API: ${remaining}/5000`;
+    }
 }
 
 async function apiFetch(url, options = {}) {
@@ -31,7 +25,7 @@ async function apiFetch(url, options = {}) {
         headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
     });
     const remaining = response.headers.get('X-RateLimit-Remaining');
-    if (remaining) updateTokenCounter(parseInt(remaining));
+    updateTokenCounter(parseInt(remaining));
     if (response.status === 403 && remaining === '0') {
         log("⚠️ Rate limit exceeded, waiting 60 seconds...");
         await new Promise(resolve => setTimeout(resolve, 60000));
@@ -65,55 +59,63 @@ async function loadConfig() {
     }
 }
 
-async function fetchLatestState() {
-    if (!API_BASE || pendingCommand) return; // skip while pushing a command
+// Fetch a raw file from GitHub, returning { blob, notModified } using ETag
+async function fetchRawWithEtag(filePath, etagRef) {
+    const url = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/${filePath}`;
+    const headers = {};
+    if (etagRef.value) headers['If-None-Match'] = etagRef.value;
+    const resp = await fetch(url, { headers });
+    if (resp.status === 304) {
+        return { notModified: true };
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const newEtag = resp.headers.get('etag');
+    if (newEtag) etagRef.value = newEtag;
+    const blob = await resp.blob();
+    return { blob, notModified: false };
+}
 
+// State polling – no API calls when nothing changed
+async function pollState() {
+    if (!GITHUB_USER || pendingCommand) return;
     try {
-        const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
-        if (!refRes.ok) throw new Error(`Branch fetch failed: ${refRes.status}`);
-        const refData = await refRes.json();
-        const commitSha = refData.object.sha;
-
-        if (commitSha === lastCommitSha) return;
-        lastCommitSha = commitSha;
-
-        const treeRes = await apiFetch(`${API_BASE}/git/trees/${commitSha}?recursive=1`);
-        const treeData = await treeRes.json();
-        const files = treeData.tree;
-
-        const screenshotItem = files.find(f => f.path === 'screenshot.png');
-        const clipboardItem = files.find(f => f.path === 'clipboard.txt');
-        const urlItem = files.find(f => f.path === 'current_url.txt');
-
-        if (screenshotItem && screenshotItem.sha !== lastScreenshotSha) {
-            lastScreenshotSha = screenshotItem.sha;
-            const imgUrl = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/screenshot.png?cache=${Date.now()}`;
-            document.getElementById('screenshot').src = imgUrl;
+        // Screenshot
+        const screenshotRef = { value: lastScreenshotEtag };
+        const screenRes = await fetchRawWithEtag('screenshot.png', screenshotRef);
+        lastScreenshotEtag = screenshotRef.value;
+        if (!screenRes.notModified && screenRes.blob) {
+            const url = URL.createObjectURL(screenRes.blob);
+            document.getElementById('screenshot').src = url;
             document.getElementById('status').innerHTML = '✅ Connected';
             log('📸 Screenshot updated');
         }
 
-        if (clipboardItem) {
-            const clipRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/clipboard.txt?cache=${Date.now()}`);
-            const clipText = await clipRes.text();
-            if (clipText !== lastClipboardText) {
-                lastClipboardText = clipText;
-                document.getElementById('linkDisplay').innerText = clipText.substring(0, 70) || '(empty)';
-                document.getElementById('linkDisplay').href = clipText.startsWith('http') ? clipText : '#';
-                log(`📋 Clipboard: ${clipText.substring(0, 100)}`);
-            }
+        // Current URL
+        const urlRef = { value: lastUrlEtag };
+        const urlRes = await fetchRawWithEtag('current_url.txt', urlRef);
+        lastUrlEtag = urlRef.value;
+        if (!urlRes.notModified && urlRes.blob) {
+            const text = await urlRes.blob.text();
+            document.getElementById('remoteUrlDisplay').value = text;
+            log(`🌐 Remote URL: ${text}`);
         }
 
-        if (urlItem) {
-            const urlRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/current_url.txt?cache=${Date.now()}`);
-            const currentUrl = await urlRes.text();
-            document.getElementById('remoteUrlDisplay').value = currentUrl;
-            log(`🌐 Remote URL: ${currentUrl}`);
-        }
+        // Clipboard (optional – rarely changes, but no API cost)
+        try {
+            const clipResp = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/clipboard.txt`);
+            if (clipResp.ok) {
+                const clipText = await clipResp.text();
+                if (clipText !== lastClipboardText) {
+                    lastClipboardText = clipText;
+                    document.getElementById('linkDisplay').innerText = clipText.substring(0, 70) || '(empty)';
+                    document.getElementById('linkDisplay').href = clipText.startsWith('http') ? clipText : '#';
+                    log(`📋 Clipboard: ${clipText.substring(0, 100)}`);
+                }
+            }
+        } catch (e) { /* ignore */ }
+
     } catch (err) {
-        console.error(err);
-        document.getElementById('status').innerHTML = '⚠️ API error';
-        log(`Error: ${err.message}`);
+        console.error('State poll error:', err);
     }
 }
 
@@ -167,30 +169,38 @@ async function sendCommand(command) {
         document.getElementById('status').innerHTML = '🔄 Waiting for remote...';
         log('Command pushed, waiting for execution...');
 
-        // Wait for the commit SHA to change, indicating the remote processed it
+        // Wait for the runner to process by polling the branch SHA
         const startSha = newCommit.sha;
         let attempts = 0;
-        const checkInterval = setInterval(async () => {
-            attempts++;
-            try {
-                const checkRef = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
-                const checkData = await checkRef.json();
-                if (checkData.object.sha !== startSha) {
-                    clearInterval(checkInterval);
-                    pendingCommand = false;
-                    document.getElementById('status').innerHTML = '✅ Done';
-                    await fetchLatestState(); // fetch final state
-                    log('Remote acknowledged command');
-                } else if (attempts > 40) { // timeout after ~2 minutes
-                    clearInterval(checkInterval);
-                    pendingCommand = false;
-                    document.getElementById('status').innerHTML = '⚠️ Timeout';
-                    log('Timeout waiting for remote');
+        const maxAttempts = 40;   // ~2 minutes at 3s intervals
+        const waitInterval = 3000;
+        await new Promise((resolve, reject) => {
+            const interval = setInterval(async () => {
+                attempts++;
+                try {
+                    const checkRef = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
+                    const checkData = await checkRef.json();
+                    if (checkData.object.sha !== startSha) {
+                        clearInterval(interval);
+                        resolve();
+                    } else if (attempts >= maxAttempts) {
+                        clearInterval(interval);
+                        reject(new Error('Timeout'));
+                    }
+                } catch (e) {
+                    log(`Check error: ${e.message}`);
                 }
-            } catch (e) {
-                log(`Check error: ${e.message}`);
-            }
-        }, 3000);
+            }, waitInterval);
+        });
+
+        pendingCommand = false;
+        document.getElementById('status').innerHTML = '✅ Done';
+        log('Remote acknowledged command');
+        // Immediately refresh the screenshot and URL
+        lastScreenshotEtag = null;   // force re-download
+        lastUrlEtag = null;
+        await pollState();
+
     } catch (err) {
         log(`❌ Send error: ${err.message}`);
         document.getElementById('status').innerHTML = '❌ Failed';
@@ -199,7 +209,8 @@ async function sendCommand(command) {
 }
 
 function initEventListeners() {
-    document.getElementById('screenshot').addEventListener('click', (e) => {
+    const screenshot = document.getElementById('screenshot');
+    screenshot.addEventListener('click', (e) => {
         const rect = e.target.getBoundingClientRect();
         const scaleX = e.target.naturalWidth / rect.width;
         const scaleY = e.target.naturalHeight / rect.height;
@@ -208,7 +219,7 @@ function initEventListeners() {
         sendCommand({ action: 'click-coordinates', x: Math.round(x), y: Math.round(y) });
     });
 
-    document.getElementById('screenshot').addEventListener('contextmenu', (e) => {
+    screenshot.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const rect = e.target.getBoundingClientRect();
         const scaleX = e.target.naturalWidth / rect.width;
@@ -245,7 +256,11 @@ function initEventListeners() {
         const link = document.getElementById('linkDisplay').href;
         if (link && link !== '#') navigator.clipboard.writeText(link);
     };
-    document.getElementById('refreshBtn').onclick = () => fetchLatestState();
+    document.getElementById('refreshBtn').onclick = () => {
+        lastScreenshotEtag = null;
+        lastUrlEtag = null;
+        pollState();
+    };
     document.getElementById('sendManualBtn').onclick = () => {
         try {
             const cmd = JSON.parse(document.getElementById('manualCommand').value);
@@ -258,9 +273,10 @@ function initEventListeners() {
 (async function start() {
     if (await loadConfig()) {
         initEventListeners();
-        setInterval(fetchLatestState, POLL_INTERVAL_MS);
-        await fetchLatestState();
-        log(`✅ Viewer started. Polling every ${POLL_INTERVAL_MS/1000}s.`);
+        // Poll state every 10 seconds (no API burn)
+        setInterval(pollState, POLL_INTERVAL_MS);
+        await pollState();
+        log(`✅ Viewer started. Polling every ${POLL_INTERVAL_MS/1000}s (ETags – no API).`);
     } else {
         log('❌ Cannot start – create config.json');
     }
