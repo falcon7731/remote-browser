@@ -1,46 +1,39 @@
-// ========== CONFIGURATION - DO NOT HARDCODE SECRETS ==========
+// ========== CONFIGURATION ==========
 let GITHUB_USER = "";
 let GITHUB_REPO = "";
 let GITHUB_TOKEN = "";
 const BRANCH = "session";
 let API_BASE = "";
-let POLL_INTERVAL_MS = 5000;  // 5 seconds
-// =============================================================
+let POLL_INTERVAL_MS = 3000;  // 3 seconds
+// ===================================
 
-let requestCount = 0;
-let lastResetTime = Date.now();
 let lastScreenshotSha = null;
 let lastClipboardText = "";
 let lastCommitSha = null;
+let pendingCommand = false;
 
-// Helper to generate unique command ID
-function generateCommandId() {
-    return Date.now() + '-' + Math.random().toString(36).substring(2, 8);
-}
+// Rate limit display debouncing
+let rateLimitDisplayTimeout = null;
+let lastKnownRemaining = null;
 
 function updateTokenCounter(remaining) {
-    // If remaining is provided from response headers, use it; otherwise show request count.
-    if (remaining !== undefined) {
-        document.getElementById('tokenCounter').innerText = `API: ${remaining}/5000`;
-    } else {
-        document.getElementById('tokenCounter').innerText = `API: ${requestCount}/5000 (est)`;
-    }
+    if (remaining === undefined) return;
+    if (rateLimitDisplayTimeout) clearTimeout(rateLimitDisplayTimeout);
+    lastKnownRemaining = remaining;
+    rateLimitDisplayTimeout = setTimeout(() => {
+        document.getElementById('tokenCounter').innerText = `API: ${lastKnownRemaining}/5000`;
+    }, 100);
 }
 
 async function apiFetch(url, options = {}) {
-    requestCount++;
-    updateTokenCounter();
     const response = await fetch(url, {
         ...options,
         headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
     });
-    // Read rate limit from headers
     const remaining = response.headers.get('X-RateLimit-Remaining');
-    if (remaining) {
-        updateTokenCounter(parseInt(remaining));
-    }
+    if (remaining) updateTokenCounter(parseInt(remaining));
     if (response.status === 403 && remaining === '0') {
-        log("⚠️ API rate limit exceeded! Waiting 60 seconds...");
+        log("⚠️ Rate limit exceeded, waiting 60 seconds...");
         await new Promise(resolve => setTimeout(resolve, 60000));
         return apiFetch(url, options);
     }
@@ -66,14 +59,15 @@ async function loadConfig() {
         log(`✅ Config loaded – ${GITHUB_USER}/${GITHUB_REPO}`);
         return true;
     } catch (err) {
-        log(`❌ Failed to load config.json: ${err.message}`);
+        log(`❌ Missing config.json: ${err.message}`);
         document.getElementById('status').innerHTML = '⚠️ Missing config.json';
         return false;
     }
 }
 
 async function fetchLatestState() {
-    if (!API_BASE) return;
+    if (!API_BASE || pendingCommand) return; // skip while pushing a command
+
     try {
         const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
         if (!refRes.ok) throw new Error(`Branch fetch failed: ${refRes.status}`);
@@ -123,19 +117,21 @@ async function fetchLatestState() {
     }
 }
 
+function generateCommandId() {
+    return Date.now() + '-' + Math.random().toString(36).substring(2, 10);
+}
+
 async function sendCommand(command) {
     if (!API_BASE) return;
-    // Add a unique ID to the command to prevent duplicate execution
     const commandWithId = { ...command, id: generateCommandId() };
-    log(`📤 Sending command: ${JSON.stringify(commandWithId)}`);
+    log(`📤 Sending command: ${commandWithId.action} (id: ${commandWithId.id})`);
     document.getElementById('status').innerHTML = '⏳ Sending...';
+    pendingCommand = true;
 
     try {
         const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
-        if (!refRes.ok) throw new Error(`Get ref failed: ${refRes.status}`);
         const refData = await refRes.json();
         const baseSha = refData.object.sha;
-        log(`Current commit SHA: ${baseSha}`);
 
         const cmdContent = JSON.stringify(commandWithId, null, 2);
         const blobRes = await apiFetch(`${API_BASE}/git/blobs`, {
@@ -156,35 +152,49 @@ async function sendCommand(command) {
         const commitRes = await apiFetch(`${API_BASE}/git/commits`, {
             method: 'POST',
             body: JSON.stringify({
-                message: `Local command: ${command.action}`,
+                message: `Cmd: ${command.action}`,
                 tree: newTree.sha,
                 parents: [baseSha]
             })
         });
         const newCommit = await commitRes.json();
 
-        const updateRes = await apiFetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
+        await apiFetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
             method: 'PATCH',
             body: JSON.stringify({ sha: newCommit.sha, force: true })
         });
-        if (!updateRes.ok) throw new Error(`Update branch failed: ${updateRes.status}`);
-        log(`Branch ${BRANCH} force‑updated to commit ${newCommit.sha.substring(0,7)}`);
 
         document.getElementById('status').innerHTML = '🔄 Waiting for remote...';
         log('Command pushed, waiting for execution...');
 
+        // Wait for the commit SHA to change, indicating the remote processed it
+        const startSha = newCommit.sha;
         let attempts = 0;
-        const interval = setInterval(async () => {
+        const checkInterval = setInterval(async () => {
             attempts++;
-            await fetchLatestState();
-            if (attempts >= 8) {
-                clearInterval(interval);
-                document.getElementById('status').innerHTML = '✅ Done';
+            try {
+                const checkRef = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
+                const checkData = await checkRef.json();
+                if (checkData.object.sha !== startSha) {
+                    clearInterval(checkInterval);
+                    pendingCommand = false;
+                    document.getElementById('status').innerHTML = '✅ Done';
+                    await fetchLatestState(); // fetch final state
+                    log('Remote acknowledged command');
+                } else if (attempts > 40) { // timeout after ~2 minutes
+                    clearInterval(checkInterval);
+                    pendingCommand = false;
+                    document.getElementById('status').innerHTML = '⚠️ Timeout';
+                    log('Timeout waiting for remote');
+                }
+            } catch (e) {
+                log(`Check error: ${e.message}`);
             }
-        }, 5000);
+        }, 3000);
     } catch (err) {
         log(`❌ Send error: ${err.message}`);
         document.getElementById('status').innerHTML = '❌ Failed';
+        pendingCommand = false;
     }
 }
 
@@ -195,8 +205,7 @@ function initEventListeners() {
         const scaleY = e.target.naturalHeight / rect.height;
         const x = (e.clientX - rect.left) * scaleX;
         const y = (e.clientY - rect.top) * scaleY;
-        if (confirm(`Click at (${Math.round(x)}, ${Math.round(y)})?`))
-            sendCommand({ action: 'click-coordinates', x: Math.round(x), y: Math.round(y) });
+        sendCommand({ action: 'click-coordinates', x: Math.round(x), y: Math.round(y) });
     });
 
     document.getElementById('screenshot').addEventListener('contextmenu', (e) => {
@@ -218,7 +227,7 @@ function initEventListeners() {
     };
     document.getElementById('manualScreenshotBtn').onclick = () => sendCommand({ action: 'screenshot' });
     document.getElementById('typeBtn').onclick = () => {
-        let text = document.getElementById('typeText').value;
+        const text = document.getElementById('typeText').value;
         if (text) sendCommand({ action: 'type', text: text });
     };
     document.getElementById('enterBtn').onclick = () => sendCommand({ action: 'press', key: 'Enter' });
@@ -226,7 +235,7 @@ function initEventListeners() {
     document.getElementById('scrollDownBtn').onclick = () => sendCommand({ action: 'scroll', text: '200' });
     document.getElementById('copyRemoteClipboardBtn').onclick = () => sendCommand({ action: 'get-clipboard' });
     document.getElementById('setRemoteClipboardBtn').onclick = () => {
-        let txt = prompt('Enter text to copy to remote clipboard:');
+        const txt = prompt('Enter text to copy to remote clipboard:');
         if (txt !== null) sendCommand({ action: 'set-clipboard', text: txt });
     };
     document.getElementById('stopBrowserBtn').onclick = () => {
@@ -235,17 +244,17 @@ function initEventListeners() {
     document.getElementById('copyLinkBtn').onclick = () => {
         const link = document.getElementById('linkDisplay').href;
         if (link && link !== '#') navigator.clipboard.writeText(link);
-        log(`📋 Copied link to local clipboard: ${link}`);
     };
     document.getElementById('refreshBtn').onclick = () => fetchLatestState();
     document.getElementById('sendManualBtn').onclick = () => {
         try {
-            let cmd = JSON.parse(document.getElementById('manualCommand').value);
+            const cmd = JSON.parse(document.getElementById('manualCommand').value);
             sendCommand(cmd);
         } catch(e) { alert('Invalid JSON: ' + e.message); }
     };
 }
 
+// Start
 (async function start() {
     if (await loadConfig()) {
         initEventListeners();
@@ -253,6 +262,6 @@ function initEventListeners() {
         await fetchLatestState();
         log(`✅ Viewer started. Polling every ${POLL_INTERVAL_MS/1000}s.`);
     } else {
-        log('❌ Cannot start – create config.json from config.example.json');
+        log('❌ Cannot start – create config.json');
     }
 })();

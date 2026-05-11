@@ -18,11 +18,9 @@ def log(msg):
         f.write(full + "\n")
 
 def git_sync():
-    """Fetch remote and reset hard to origin/session to get latest command."""
     try:
         subprocess.run(["git", "fetch", "origin", BRANCH], check=True, capture_output=True)
         subprocess.run(["git", "reset", "--hard", f"origin/{BRANCH}"], check=True, capture_output=True)
-        log("git sync successful (fetch + reset)")
         return True
     except subprocess.CalledProcessError as e:
         log(f"git sync failed: {e}")
@@ -38,7 +36,7 @@ def read_command():
         with open("command.json", "r") as f:
             cmd = json.load(f)
             if cmd.get("action"):
-                log(f"Read command: {cmd['action']} (id: {cmd.get('id', 'no-id')})")
+                log(f"Read command: {cmd['action']} (id: {cmd.get('id', 'missing')})")
             return cmd
     except:
         return {}
@@ -50,9 +48,8 @@ def write_file(path, content):
 
 def main():
     log("🚀 Persistent browser starting")
-    git_sync()  # initial sync
+    git_sync()
 
-    # Load session
     session = {}
     if os.path.exists("session.json"):
         with open("session.json") as f:
@@ -69,7 +66,6 @@ def main():
         page = context.new_page()
         log("Browser launched")
 
-        # Restore cookies and URL
         if session.get("cookies"):
             context.add_cookies(session["cookies"])
             log(f"Restored {len(session['cookies'])} cookies")
@@ -98,7 +94,6 @@ def main():
         heartbeat = 0
 
         while True:
-            # Check time limit
             if time.time() - START_TIME > MAX_HOURS * 3600:
                 log("Time limit reached, exiting")
                 break
@@ -107,16 +102,18 @@ def main():
             if heartbeat % 30 == 0:
                 log(f"Heartbeat | URL: {page.url} | uptime: {int(time.time()-START_TIME)}s")
 
-            # Sync with remote once per iteration
             git_sync()
-
             cmd = read_command()
             if cmd and cmd.get("action"):
                 cmd_id = cmd.get("id")
-                # Execute only if this command hasn't been seen before
-                if cmd_id and cmd_id != last_command_id:
+                if not cmd_id:
+                    log(f"Skipping command without id (likely stale), clearing it")
+                    write_file("command.json", "{}")
+                    git_force_push()
+                    continue
+                if cmd_id != last_command_id:
                     last_command_id = cmd_id
-                    log(f"📩 Executing command: {cmd['action']} (id: {cmd_id})")
+                    log(f"📩 Executing: {cmd['action']} (id: {cmd_id})")
                     try:
                         action = cmd["action"]
                         if action == "goto":
@@ -182,7 +179,6 @@ def main():
                         else:
                             raise ValueError(f"Unknown action: {action}")
 
-                        # Capture post‑command state
                         log("Capturing post‑command state...")
                         page.screenshot(path="screenshot.png", full_page=True)
                         write_file("page.html", page.content())
@@ -199,7 +195,6 @@ def main():
                             f.write("\n".join(f"- {l}" for l in links[:100]))
                             f.write(f"\n\n![Screenshot](./screenshot.png)\n\n## Clipboard\n```\n{open('clipboard.txt').read()}\n```")
 
-                        # Clear command.json to prevent re‑execution
                         write_file("command.json", "{}")
                         git_force_push()
                         log(f"✅ {action} completed and pushed")
@@ -213,8 +208,8 @@ def main():
                         write_file("results.md", f"# Error\n```\n{e}\n{traceback.format_exc()}\n```")
                         git_force_push()
                 else:
-                    if cmd_id:
-                        log(f"Skipping already executed command id: {cmd_id}")
+                    log(f"Skipping duplicate command id: {cmd_id}")
+
             time.sleep(1)
 
         browser.close()
