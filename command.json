@@ -1,4 +1,4 @@
 {
-  "action": "scroll",
-  "text": "-200"
+  "action": "goto",
+  "url": "https://about:blank"
 }
