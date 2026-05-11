@@ -13,7 +13,6 @@ function log(msg) {
     const logDiv = document.getElementById('log');
     const timestamp = new Date().toLocaleTimeString();
     logDiv.innerHTML = `[${timestamp}] ${msg}\n` + logDiv.innerHTML;
-    if (logDiv.children.length > 100) logDiv.innerHTML = logDiv.innerHTML.slice(0, 2000);
 }
 
 async function fetchLatestState() {
@@ -31,7 +30,6 @@ async function fetchLatestState() {
         const treeData = await treeRes.json();
         const screenshotItem = treeData.tree.find(f => f.path === 'screenshot.png');
         const clipboardItem = treeData.tree.find(f => f.path === 'clipboard.txt');
-        const resultsItem = treeData.tree.find(f => f.path === 'results.md');
 
         if (screenshotItem && screenshotItem.sha !== lastScreenshotSha) {
             lastScreenshotSha = screenshotItem.sha;
@@ -49,16 +47,6 @@ async function fetchLatestState() {
                 document.getElementById('linkDisplay').innerText = clipText.substring(0, 70) || '(empty)';
                 document.getElementById('linkDisplay').href = clipText.startsWith('http') ? clipText : '#';
                 log(`Remote clipboard updated: ${clipText.substring(0, 100)}`);
-            }
-        }
-
-        if (resultsItem) {
-            const resultsRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/results.md?cache=${Date.now()}`);
-            const resultsText = await resultsRes.text();
-            const linkMatch = resultsText.match(/Link: (https?:\/\/[^\s]+)/);
-            if (linkMatch && !clipboardItem) {
-                document.getElementById('linkDisplay').href = linkMatch[1];
-                document.getElementById('linkDisplay').innerText = linkMatch[1].substring(0, 70);
             }
         }
     } catch (err) {
@@ -184,6 +172,5 @@ document.getElementById('sendManualBtn').onclick = () => {
     } catch(e) { alert('Invalid JSON: ' + e.message); }
 };
 
-// Start polling
 setInterval(fetchLatestState, 3000);
 fetchLatestState().then(() => log('Viewer started. Polling every 3s.'));
