@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+import os
+import json
+import time
+import hashlib
+import subprocess
+import traceback
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+BRANCH = "session"
+MAX_HOURS = float(os.environ.get("SESSION_HOURS", "6"))
+START_TIME = time.time()
+
+def log(msg):
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+    full = f"[{timestamp}] {msg}"
+    print(full)
+    with open("remote.log", "a") as f:
+        f.write(full + "\n")
+
+def git_force_push():
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "-m", "State update [skip ci]", "--allow-empty"], check=True)
+    subprocess.run(["git", "push", "origin", BRANCH, "--force"], check=True)
+
+def read_command():
+    try:
+        with open("command.json", "r") as f:
+            cmd = json.load(f)
+            if cmd.get("action"):
+                log(f"Command read: {cmd['action']}")
+            return cmd
+    except:
+        return {}
+
+def write_file(path, content):
+    with open(path, "w") as f:
+        f.write(content)
+    log(f"Wrote {path}")
+
+def main():
+    log("🚀 Starting persistent browser")
+    subprocess.run(["git", "checkout", BRANCH], check=True)
+    
+    session = {}
+    if os.path.exists("session.json"):
+        with open("session.json") as f:
+            session = json.load(f)
+    else:
+        session = {"cookies": [], "localStorage": {}, "lastUrl": "about:blank", "scrollY": 0}
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        context = browser.new_context(viewport={"width": 1280, "height": 720})
+        page = context.new_page()
+        
+        if session.get("cookies"):
+            context.add_cookies(session["cookies"])
+        if session.get("lastUrl") and session["lastUrl"] != "about:blank":
+            page.goto(session["lastUrl"])
+            if session.get("localStorage"):
+                page.evaluate("""(storage) => { for(let [k,v] of Object.entries(storage)) localStorage.setItem(k,v); }""", session["localStorage"])
+            page.evaluate(f"window.scrollTo(0, {session.get('scrollY',0)})")
+        
+        page.screenshot(path="screenshot.png", full_page=True)
+        write_file("page.html", page.content())
+        write_file("clipboard.txt", "")
+        write_file("current_url.txt", page.url)
+        write_file("results.md", "# Ready\n![Screenshot](./screenshot.png)")
+        write_file("session.json", json.dumps(session, indent=2))
+        write_file("remote.log", "")
+        git_force_push()
+        log("✅ Initial state pushed")
+        
+        last_cmd_hash = ""
+        heartbeat = 0
+        
+        while True:
+            if time.time() - START_TIME > MAX_HOURS * 3600:
+                log("Time limit reached, exiting")
+                break
+            
+            heartbeat += 1
+            if heartbeat % 30 == 0:
+                log(f"Heartbeat | URL: {page.url}")
+            
+            cmd = read_command()
+            if cmd and cmd.get("action"):
+                cmd_hash = hashlib.md5(json.dumps(cmd).encode()).hexdigest()
+                if cmd_hash != last_cmd_hash:
+                    last_cmd_hash = cmd_hash
+                    log(f"Executing: {cmd['action']}")
+                    
+                    try:
+                        action = cmd["action"]
+                        if action == "goto":
+                            page.goto(cmd["url"], timeout=30000)
+                            result = f"Goto {cmd['url']}"
+                        elif action == "screenshot":
+                            page.screenshot(path="screenshot.png", full_page=True)
+                            result = "Screenshot taken"
+                        elif action == "click-coordinates":
+                            page.mouse.click(cmd["x"], cmd["y"])
+                            result = f"Click ({cmd['x']},{cmd['y']})"
+                        elif action == "rightclick-coordinates":
+                            page.mouse.click(cmd["x"], cmd["y"], button="right")
+                            info = page.evaluate(f"({{x,y}}) => {{let el=document.elementsFromPoint(x,y)[0]; return el?{{tag:el.tagName,text:el.innerText?.slice(0,200),href:el.href}}:null;}}", {"x":cmd["x"],"y":cmd["y"]})
+                            result = f"Right-click at ({cmd['x']},{cmd['y']})\nInfo: {json.dumps(info)}"
+                            if info and info.get("href"):
+                                write_file("clipboard.txt", info["href"])
+                                result += f"\nCopied link: {info['href']}"
+                            elif info and info.get("text"):
+                                write_file("clipboard.txt", info["text"])
+                                result += f"\nCopied text: {info['text'][:100]}"
+                        elif action == "type":
+                            page.keyboard.type(cmd["text"])
+                            result = f"Typed '{cmd['text']}'"
+                        elif action == "press":
+                            page.keyboard.press(cmd["key"])
+                            result = f"Pressed {cmd['key']}"
+                        elif action == "scroll":
+                            delta = int(cmd.get("text",100))
+                            page.evaluate(f"window.scrollBy(0,{delta})")
+                            result = f"Scrolled {delta}"
+                        elif action == "copy-link-at-coordinates":
+                            link = page.evaluate(f"({{x,y}}) => {{let el=document.elementsFromPoint(x,y).find(e=>e.tagName==='A'); return el?el.href:null;}}", {"x":cmd["x"],"y":cmd["y"]})
+                            if link:
+                                write_file("clipboard.txt", link)
+                                result = f"Copied link: {link}"
+                            else:
+                                result = "No link"
+                        elif action == "get-clipboard":
+                            clip = open("clipboard.txt").read() if os.path.exists("clipboard.txt") else ""
+                            result = f"Clipboard: {clip or '(empty)'}"
+                        elif action == "set-clipboard":
+                            write_file("clipboard.txt", cmd.get("text",""))
+                            result = f"Clipboard set to {cmd.get('text','')}"
+                        elif action == "eval":
+                            res = page.evaluate(cmd["script"])
+                            result = f"Result: {json.dumps(res)}"
+                        elif action == "stop":
+                            log("Stop command")
+                            break
+                        else:
+                            raise ValueError(f"Unknown {action}")
+                        
+                        page.screenshot(path="screenshot.png", full_page=True)
+                        write_file("page.html", page.content())
+                        write_file("current_url.txt", page.url)
+                        session["cookies"] = context.cookies()
+                        session["localStorage"] = page.evaluate("() => {let i={}; for(let k=0;k<localStorage.length;k++){let key=localStorage.key(k); i[key]=localStorage.getItem(key);} return i;}")
+                        session["lastUrl"] = page.url
+                        session["scrollY"] = page.evaluate("window.scrollY")
+                        write_file("session.json", json.dumps(session, indent=2))
+                        
+                        links = page.evaluate("() => Array.from(document.querySelectorAll('a[href]')).map(a=>a.href)")
+                        with open("results.md","w") as f:
+                            f.write(f"# Command: {action}\n**Result:** {result}\n\n**URL:** {page.url}\n\n## Links ({len(links)})\n")
+                            f.write("\n".join(f"- {l}" for l in links[:100]))
+                            f.write(f"\n\n![Screenshot](./screenshot.png)\n\n## Clipboard\n```\n{open('clipboard.txt').read()}\n```")
+                        
+                        write_file("command.json", "{}")
+                        git_force_push()
+                        log(f"✅ {action} done")
+                        
+                    except Exception as e:
+                        log(f"Error: {e}\n{traceback.format_exc()}")
+                        write_file("results.md", f"# Error\n```\n{e}\n{traceback.format_exc()}\n```")
+                        git_force_push()
+            
+            time.sleep(1)
+        
+        browser.close()
+
+if __name__ == "__main__":
+    main()
