@@ -30,11 +30,8 @@ def write_file(path, content):
 
 def main():
     print(f"🚀 Persistent browser - max session: {MAX_HOURS} hours")
-    
-    # Ensure we are on the correct branch
     subprocess.run(["git", "checkout", BRANCH], check=True)
     
-    # Load previous session
     session = {}
     if os.path.exists("session.json"):
         with open("session.json", "r") as f:
@@ -47,7 +44,6 @@ def main():
         context = browser.new_context(viewport={"width": 1280, "height": 720})
         page = context.new_page()
         
-        # Restore previous state
         if session.get("cookies"):
             context.add_cookies(session["cookies"])
         if session.get("lastUrl") and session["lastUrl"] != "about:blank":
@@ -56,39 +52,42 @@ def main():
                 page.evaluate("""(storage) => { for (let [k,v] of Object.entries(storage)) localStorage.setItem(k, v); }""", session["localStorage"])
             page.evaluate(f"window.scrollTo(0, {session.get('scrollY', 0)})")
         
-        # Initial push
         page.screenshot(path="screenshot.png", full_page=True)
         write_file("page.html", page.content())
         write_file("clipboard.txt", "")
-        write_file("results.md", "# Remote browser ready")
+        write_file("current_url.txt", page.url)
+        write_file("results.md", "# Remote browser ready\n\n![Screenshot](./screenshot.png)")
         write_file("session.json", json.dumps(session, indent=2))
         git_force_push_all()
+        print("✅ Initial state pushed")
         
         last_cmd_hash = ""
         heartbeat = 0
         
         while True:
-            # Check session time limit
             if time.time() - START_TIME > MAX_HOURS * 3600:
-                print(f"Session time limit ({MAX_HOURS} hours) reached. Exiting.")
+                print(f"⏰ Session time limit ({MAX_HOURS} hours) reached. Exiting.")
                 break
             
             heartbeat += 1
             if heartbeat % 30 == 0:
-                print(f"💓 Heartbeat {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"💓 Heartbeat {time.strftime('%Y-%m-%d %H:%M:%S')} | URL: {page.url}")
             
             cmd = read_command()
             if cmd and cmd.get("action"):
                 cmd_hash = hashlib.md5(json.dumps(cmd).encode()).hexdigest()
                 if cmd_hash != last_cmd_hash:
                     last_cmd_hash = cmd_hash
-                    print(f"📩 Command: {cmd['action']}")
+                    print(f"📩 Command received: {cmd['action']}")
                     
                     try:
                         action = cmd["action"]
                         if action == "goto":
                             page.goto(cmd["url"], timeout=30000)
                             result = f"Navigated to {cmd['url']}"
+                        elif action == "screenshot":
+                            page.screenshot(path="screenshot.png", full_page=True)
+                            result = "Manual screenshot taken"
                         elif action == "click-coordinates":
                             page.mouse.click(cmd["x"], cmd["y"])
                             result = f"Clicked at ({cmd['x']}, {cmd['y']})"
@@ -139,7 +138,7 @@ def main():
                             res = page.evaluate(cmd["script"])
                             result = f"Script result: {json.dumps(res)}"
                         elif action == "stop":
-                            print("Stop command received. Exiting.")
+                            print("🛑 Stop command received. Exiting.")
                             break
                         else:
                             raise ValueError(f"Unknown action: {action}")
@@ -147,6 +146,7 @@ def main():
                         # Capture new state
                         page.screenshot(path="screenshot.png", full_page=True)
                         write_file("page.html", page.content())
+                        write_file("current_url.txt", page.url)
                         session["cookies"] = context.cookies()
                         session["localStorage"] = page.evaluate("() => { let items={}; for(let i=0;i<localStorage.length;i++){let k=localStorage.key(i); items[k]=localStorage.getItem(k);} return items; }")
                         session["lastUrl"] = page.url
@@ -155,17 +155,17 @@ def main():
                         
                         links = page.evaluate("() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href)")
                         with open("results.md", "w") as f:
-                            f.write(f"# Command: {action}\n**Result:**\n{result}\n\n**URL:** {session['lastUrl']}\n\n## Links ({len(links)})\n")
+                            f.write(f"# Command: {action}\n**Result:**\n{result}\n\n**URL:** {page.url}\n\n## Links ({len(links)})\n")
                             f.write("\n".join(f"- {l}" for l in links[:100]))
                             f.write(f"\n\n![Screenshot](./screenshot.png)\n\n## Clipboard\n```\n{open('clipboard.txt').read()}\n```")
                         
                         write_file("command.json", "{}")
                         git_force_push_all()
-                        print("✅ Command executed and pushed")
+                        print(f"✅ Command '{action}' executed, state pushed at {time.strftime('%H:%M:%S')}")
                         
                     except Exception as e:
-                        print(f"❌ Error: {e}")
-                        write_file("results.md", f"# Error\n{e}")
+                        print(f"❌ Command error: {e}")
+                        write_file("results.md", f"# Error\n{e}\n\nCheck workflow logs.")
                         git_force_push_all()
             
             time.sleep(1)
