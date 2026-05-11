@@ -1,4 +1,4 @@
 {
-  "action": "goto",
-  "url": "https://www.youtube.com/"
+  "action": "scroll",
+  "text": "-200"
 }
