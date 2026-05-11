@@ -19,12 +19,16 @@ def log(msg):
     with open("remote.log", "a") as f:
         f.write(full + "\n")
 
-def git_pull():
+def git_fetch_hard_reset():
+    """Fetch latest from origin and reset local branch to match exactly."""
     try:
-        subprocess.run(["git", "pull", "origin", BRANCH], check=True, capture_output=True)
-        log("git pull successful")
+        subprocess.run(["git", "fetch", "origin", BRANCH], check=True, capture_output=True)
+        subprocess.run(["git", "reset", "--hard", f"origin/{BRANCH}"], check=True, capture_output=True)
+        log("git sync successful (fetch + reset)")
+        return True
     except subprocess.CalledProcessError as e:
-        log(f"git pull failed: {e}")
+        log(f"git sync failed: {e.stderr.decode() if e.stderr else str(e)}")
+        return False
 
 def git_force_push():
     subprocess.run(["git", "add", "-A"], check=True)
@@ -32,11 +36,10 @@ def git_force_push():
     subprocess.run(["git", "push", "origin", BRANCH, "--force"], check=True)
 
 def read_command():
-    # First, pull latest changes from remote
-    git_pull()
+    # Ensure we have latest command.json from remote before reading
+    git_fetch_hard_reset()
     cmd_path = "command.json"
     if not os.path.exists(cmd_path):
-        log("command.json not found")
         return {}
     try:
         with open(cmd_path, "r") as f:
@@ -45,7 +48,7 @@ def read_command():
                 return {}
             cmd = json.loads(content)
             if cmd.get("action"):
-                log(f"Read command: {cmd['action']} with URL: {cmd.get('url', '')}")
+                log(f"Read command: {cmd['action']} with data: {cmd}")
             return cmd
     except Exception as e:
         log(f"Error reading command.json: {e}")
@@ -62,7 +65,6 @@ def main():
     subprocess.run(["git", "checkout", BRANCH], check=True)
     log(f"Checked out {BRANCH}")
 
-    # Load previous session
     session = {}
     if os.path.exists("session.json"):
         with open("session.json") as f:
@@ -89,9 +91,8 @@ def main():
                 page.evaluate("""(storage) => { for(let [k,v] of Object.entries(storage)) localStorage.setItem(k,v); }""", session["localStorage"])
                 log("Restored localStorage")
             page.evaluate(f"window.scrollTo(0, {session.get('scrollY',0)})")
-            log(f"Scrolled to Y={session.get('scrollY',0)}")
 
-        # Initial push
+        # Initial capture and push
         log("Taking initial screenshot...")
         page.screenshot(path="screenshot.png", full_page=True)
         write_file("page.html", page.content())
@@ -186,6 +187,7 @@ def main():
                         else:
                             raise ValueError(f"Unknown action: {action}")
 
+                        # Post‑command capture
                         log("Capturing post‑command state...")
                         page.screenshot(path="screenshot.png", full_page=True)
                         write_file("page.html", page.content())

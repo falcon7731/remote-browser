@@ -7,41 +7,38 @@ let API_BASE = "";
 let POLL_INTERVAL_MS = 5000;  // 5 seconds
 // =============================================================
 
-let requestCount = 0;
-let lastResetTime = Date.now();
 let lastScreenshotSha = null;
 let lastClipboardText = "";
 let lastCommitSha = null;
-
-function updateTokenCounter() {
-    let now = Date.now();
-    if (now - lastResetTime >= 3600000) {
-        requestCount = 0;
-        lastResetTime = now;
-    }
-    document.getElementById('tokenCounter').innerText = `API: ${requestCount}/5000`;
-}
-
-async function apiFetch(url, options = {}) {
-    requestCount++;
-    updateTokenCounter();
-    const response = await fetch(url, {
-        ...options,
-        headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
-    });
-    if (response.status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
-        log("⚠️ Rate limit exceeded, waiting 60 seconds...");
-        await new Promise(resolve => setTimeout(resolve, 60000));
-        return apiFetch(url, options);
-    }
-    return response;
-}
 
 function log(msg) {
     const logDiv = document.getElementById('log');
     const timestamp = new Date().toLocaleTimeString();
     logDiv.innerHTML = `[${timestamp}] ${msg}\n` + logDiv.innerHTML;
     if (logDiv.children.length > 200) logDiv.innerHTML = logDiv.innerHTML.slice(0, 5000);
+}
+
+async function apiFetch(url, options = {}) {
+    const response = await fetch(url, {
+        ...options,
+        headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
+    });
+    // Update rate limit display from response headers
+    const remaining = response.headers.get('X-RateLimit-Remaining');
+    const limit = response.headers.get('X-RateLimit-Limit');
+    if (remaining !== null && limit !== null) {
+        document.getElementById('tokenCounter').innerText = `API: ${remaining}/${limit}`;
+    } else {
+        // fallback: increment counter manually (less accurate)
+        let current = parseInt(document.getElementById('tokenCounter').innerText.split(':')[1]?.split('/')[0]?.trim() || "0");
+        document.getElementById('tokenCounter').innerText = `API: ${current+1}/?`;
+    }
+    if (response.status === 403 && remaining === '0') {
+        log("⚠️ API rate limit exceeded! Waiting 60 seconds...");
+        await new Promise(resolve => setTimeout(resolve, 60000));
+        return apiFetch(url, options);
+    }
+    return response;
 }
 
 async function loadConfig() {
@@ -119,14 +116,12 @@ async function sendCommand(command) {
     document.getElementById('status').innerHTML = '⏳ Sending...';
 
     try {
-        // Get current commit SHA
         const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
         if (!refRes.ok) throw new Error(`Get ref failed: ${refRes.status}`);
         const refData = await refRes.json();
         const baseSha = refData.object.sha;
         log(`Current commit SHA: ${baseSha}`);
 
-        // Create blob for command.json
         const cmdContent = JSON.stringify(command, null, 2);
         const blobRes = await apiFetch(`${API_BASE}/git/blobs`, {
             method: 'POST',
@@ -134,7 +129,6 @@ async function sendCommand(command) {
         });
         const blobData = await blobRes.json();
 
-        // Create new tree
         const treeRes = await apiFetch(`${API_BASE}/git/trees`, {
             method: 'POST',
             body: JSON.stringify({
@@ -144,7 +138,6 @@ async function sendCommand(command) {
         });
         const newTree = await treeRes.json();
 
-        // Create commit
         const commitRes = await apiFetch(`${API_BASE}/git/commits`, {
             method: 'POST',
             body: JSON.stringify({
@@ -155,7 +148,6 @@ async function sendCommand(command) {
         });
         const newCommit = await commitRes.json();
 
-        // Force update branch
         const updateRes = await apiFetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
             method: 'PATCH',
             body: JSON.stringify({ sha: newCommit.sha, force: true })
@@ -182,7 +174,6 @@ async function sendCommand(command) {
 }
 
 function initEventListeners() {
-    // Click on screenshot (left click)
     document.getElementById('screenshot').addEventListener('click', (e) => {
         const rect = e.target.getBoundingClientRect();
         const scaleX = e.target.naturalWidth / rect.width;
@@ -193,7 +184,6 @@ function initEventListeners() {
             sendCommand({ action: 'click-coordinates', x: Math.round(x), y: Math.round(y) });
     });
 
-    // Right‑click on screenshot
     document.getElementById('screenshot').addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const rect = e.target.getBoundingClientRect();
@@ -247,7 +237,7 @@ function initEventListeners() {
         initEventListeners();
         setInterval(fetchLatestState, POLL_INTERVAL_MS);
         await fetchLatestState();
-        log(`✅ Viewer started. Polling every ${POLL_INTERVAL_MS/1000}s. Token limit: 5000/hour.`);
+        log(`✅ Viewer started. Polling every ${POLL_INTERVAL_MS/1000}s.`);
     } else {
         log('❌ Cannot start – create config.json from config.example.json');
     }
