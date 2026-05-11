@@ -1,2 +1,2 @@
 # Ignore actual config file (contains secret token)
-config.example.json
+config.json
