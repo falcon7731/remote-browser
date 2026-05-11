@@ -1,0 +1,274 @@
+name: 🌐 Persistent Remote Browser
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_hours:
+        description: 'How long to run (hours, max 6)'
+        required: false
+        default: '6'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  browse:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(github.event.inputs.session_hours || 6) * 60 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: session
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        run: |
+          npm init -y
+          npm install puppeteer
+
+      - name: Create browser directory
+        run: mkdir -p browser
+
+      - name: Create persistent-runner.js
+        run: |
+          cat > browser/persistent-runner.js << 'EOF'
+          const puppeteer = require('puppeteer');
+          const fs = require('fs').promises;
+          const { execSync } = require('child_process');
+
+          const COMMAND_FILE = 'command.json';
+          const SESSION_FILE = 'session.json';
+          const SCREENSHOT_FILE = 'screenshot.png';
+          const HTML_FILE = 'page.html';
+          const CLIPBOARD_FILE = 'clipboard.txt';
+          const RESULTS_FILE = 'results.md';
+
+          let browser, page;
+          let lastCommandHash = '';
+
+          async function loadSession() {
+            try {
+              const data = await fs.readFile(SESSION_FILE, 'utf8');
+              return JSON.parse(data);
+            } catch { return { cookies: [], localStorage: {}, lastUrl: 'about:blank', scrollY: 0 }; }
+          }
+
+          async function saveSession(session) {
+            await fs.writeFile(SESSION_FILE, JSON.stringify(session, null, 2));
+          }
+
+          async function restoreBrowserState(page, session) {
+            if (session.cookies.length) await page.setCookie(...session.cookies);
+            if (session.lastUrl && session.lastUrl !== 'about:blank') {
+              await page.goto(session.lastUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+              await page.evaluate(scrollY => window.scrollTo(0, scrollY), session.scrollY);
+            }
+          }
+
+          async function capturePageState(page) {
+            await page.screenshot({ path: SCREENSHOT_FILE, fullPage: true });
+            const html = await page.content();
+            await fs.writeFile(HTML_FILE, html);
+          }
+
+          async function updateClipboard(content) {
+            await fs.writeFile(CLIPBOARD_FILE, content || '');
+          }
+
+          async function readClipboard() {
+            try {
+              return await fs.readFile(CLIPBOARD_FILE, 'utf8');
+            } catch { return ''; }
+          }
+
+          async function executeCommand(command, session) {
+            const { action, x, y, selector, text, key, script, url } = command;
+            let result = '';
+
+            switch (action) {
+              case 'goto':
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+                result = `Navigated to ${url}`;
+                break;
+
+              case 'click-coordinates':
+                await page.mouse.click(x, y);
+                result = `Clicked at (${x}, ${y})`;
+                break;
+
+              case 'rightclick-coordinates':
+                await page.mouse.click(x, y, { button: 'right' });
+                const elementInfo = await page.evaluate((x, y) => {
+                  const el = document.elementsFromPoint(x, y)[0];
+                  if (!el) return null;
+                  return {
+                    tag: el.tagName,
+                    text: el.innerText?.slice(0, 200),
+                    href: el.href,
+                    src: el.src
+                  };
+                }, x, y);
+                result = `Right-clicked at (${x}, ${y})\nElement info: ${JSON.stringify(elementInfo, null, 2)}`;
+                if (elementInfo?.href) {
+                  await updateClipboard(elementInfo.href);
+                  result += `\nCopied link to clipboard: ${elementInfo.href}`;
+                } else if (elementInfo?.text) {
+                  await updateClipboard(elementInfo.text);
+                  result += `\nCopied text to clipboard: ${elementInfo.text.slice(0, 100)}...`;
+                }
+                break;
+
+              case 'click-selector':
+                await page.waitForSelector(selector, { timeout: 5000 });
+                await page.click(selector);
+                result = `Clicked ${selector}`;
+                break;
+
+              case 'type':
+                await page.keyboard.type(text);
+                result = `Typed "${text}"`;
+                break;
+
+              case 'press':
+                await page.keyboard.press(key);
+                result = `Pressed ${key}`;
+                break;
+
+              case 'scroll':
+                const delta = text ? parseInt(text) : 100;
+                await page.evaluate((d) => window.scrollBy(0, d), delta);
+                result = `Scrolled by ${delta}px`;
+                break;
+
+              case 'copy-link-at-coordinates':
+                const link = await page.evaluate((x, y) => {
+                  const el = document.elementsFromPoint(x, y).find(e => e.tagName === 'A');
+                  return el ? el.href : null;
+                }, x, y);
+                if (link) {
+                  await updateClipboard(link);
+                  result = `Copied link to clipboard: ${link}`;
+                } else {
+                  result = 'No link found at that position';
+                }
+                break;
+
+              case 'get-clipboard':
+                const clip = await readClipboard();
+                result = `Remote clipboard: ${clip || '(empty)'}`;
+                break;
+
+              case 'set-clipboard':
+                await updateClipboard(text || '');
+                result = `Remote clipboard set to: ${text}`;
+                break;
+
+              case 'eval':
+                const evalResult = await page.evaluate(script);
+                result = `Script result:\n${JSON.stringify(evalResult, null, 2)}`;
+                break;
+
+              case 'stop':
+                result = 'Stopping persistent browser...';
+                await saveSession(session);
+                process.exit(0);
+                break;
+
+              default:
+                throw new Error(`Unknown action: ${action}`);
+            }
+
+            // Update session state
+            const cookies = await page.cookies();
+            const localStorage = await page.evaluate(() => {
+              const items = {};
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                items[k] = localStorage.getItem(k);
+              }
+              return items;
+            });
+            session.cookies = cookies;
+            session.localStorage = localStorage;
+            session.lastUrl = page.url();
+            session.scrollY = await page.evaluate(() => window.scrollY);
+
+            return result;
+          }
+
+          async function forcePushAll() {
+            execSync('git add -A', { stdio: 'inherit' });
+            execSync('git commit -m "Remote browser state update [skip ci]" --allow-empty', { stdio: 'inherit' });
+            execSync('git push origin session --force', { stdio: 'inherit' });
+          }
+
+          async function getCommandHash() {
+            try {
+              const content = await fs.readFile(COMMAND_FILE, 'utf8');
+              const cmd = JSON.parse(content);
+              if (!cmd.action) return '';
+              const hash = require('crypto').createHash('md5').update(content).digest('hex');
+              return hash;
+            } catch { return ''; }
+          }
+
+          (async () => {
+            console.log('🚀 Starting persistent remote browser...');
+            const session = await loadSession();
+            console.log(`Session: last URL = ${session.lastUrl || '(none)'}`);
+
+            browser = await puppeteer.launch({
+              headless: 'new',
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            });
+            page = await browser.newPage();
+            await page.setViewport({ width: 1280, height: 720 });
+            await restoreBrowserState(page, session);
+            await capturePageState(page);
+            await forcePushAll();
+
+            console.log('Browser ready. Waiting for commands...');
+            let heartbeatCounter = 0;
+
+            while (true) {
+              if (heartbeatCounter++ % 30 === 0) {
+                console.log(`💓 Heartbeat: ${new Date().toISOString()}`);
+              }
+
+              const newHash = await getCommandHash();
+              if (newHash && newHash !== lastCommandHash) {
+                lastCommandHash = newHash;
+                console.log(`📩 New command detected, hash: ${newHash}`);
+
+                const commandRaw = await fs.readFile(COMMAND_FILE, 'utf8');
+                const command = JSON.parse(commandRaw);
+
+                try {
+                  const output = await executeCommand(command, session);
+                  await capturePageState(page);
+                  await saveSession(session);
+
+                  const links = await page.evaluate(() => 
+                    Array.from(document.querySelectorAll('a[href]')).map(a => a.href)
+                  );
+                  const resultsMd = `# Remote Browser Output\n**Command:** ${command.action}\n**Result:**\n${output}\n\n**URL:** ${session.lastUrl}\n\n## Links (${links.length})\n${links.slice(0, 100).map(l => `- ${l}`).join('\n')}\n\n![Screenshot](${SCREENSHOT_FILE})\n\n## Clipboard\n\`\`\`\n${await readClipboard()}\n\`\`\``;
+                  await fs.writeFile(RESULTS_FILE, resultsMd);
+
+                  await fs.writeFile(COMMAND_FILE, '{}');
+                  await forcePushAll();
+                  console.log('✅ Command executed, results pushed.');
+                } catch (err) {
+                  console.error('❌ Command error:', err);
+                  await fs.writeFile(RESULTS_FILE, `# Error\n${err.message}\n${err.stack}`);
+                  await forcePushAll();
+                }
+              }
+
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          })().catch(console.error);
+          EOF
+
+      - name: Run persistent browser
+        run: node browser/persistent-runner.js
