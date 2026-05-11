@@ -1,9 +1,10 @@
-// No hardcoded secrets – config is loaded from config.json
+// ========== CONFIGURATION - CHANGE THESE ==========
 let GITHUB_USER = "";
 let GITHUB_REPO = "";
 let GITHUB_TOKEN = "";
 const BRANCH = "session";
 let API_BASE = "";
+// =================================================
 
 let lastScreenshotSha = null;
 let lastClipboardText = "";
@@ -12,6 +13,8 @@ function log(msg) {
     const logDiv = document.getElementById('log');
     const timestamp = new Date().toLocaleTimeString();
     logDiv.innerHTML = `[${timestamp}] ${msg}\n` + logDiv.innerHTML;
+    // Keep last 50 lines
+    if (logDiv.children.length > 100) logDiv.innerHTML = logDiv.innerHTML.slice(0, 2000);
 }
 
 async function loadConfig() {
@@ -23,7 +26,7 @@ async function loadConfig() {
         GITHUB_REPO = config.github_repo;
         GITHUB_TOKEN = config.github_token;
         API_BASE = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}`;
-        log(`Config loaded – user: ${GITHUB_USER}, repo: ${GITHUB_REPO}`);
+        log(`✅ Config loaded – user: ${GITHUB_USER}, repo: ${GITHUB_REPO}`);
         return true;
     } catch (err) {
         log(`❌ Failed to load config.json: ${err.message}`);
@@ -48,13 +51,14 @@ async function fetchLatestState() {
         const treeData = await treeRes.json();
         const screenshotItem = treeData.tree.find(f => f.path === 'screenshot.png');
         const clipboardItem = treeData.tree.find(f => f.path === 'clipboard.txt');
+        const urlItem = treeData.tree.find(f => f.path === 'current_url.txt');
 
         if (screenshotItem && screenshotItem.sha !== lastScreenshotSha) {
             lastScreenshotSha = screenshotItem.sha;
             const imgUrl = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/screenshot.png?cache=${Date.now()}`;
             document.getElementById('screenshot').src = imgUrl;
             document.getElementById('status').innerHTML = '✅ Connected';
-            log('Screenshot updated');
+            log('📸 Screenshot updated');
         }
 
         if (clipboardItem) {
@@ -64,8 +68,15 @@ async function fetchLatestState() {
                 lastClipboardText = clipText;
                 document.getElementById('linkDisplay').innerText = clipText.substring(0, 70) || '(empty)';
                 document.getElementById('linkDisplay').href = clipText.startsWith('http') ? clipText : '#';
-                log(`Remote clipboard updated: ${clipText.substring(0, 100)}`);
+                log(`📋 Remote clipboard: ${clipText.substring(0, 100)}`);
             }
+        }
+
+        if (urlItem) {
+            const urlRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/current_url.txt?cache=${Date.now()}`);
+            const currentUrl = await urlRes.text();
+            document.getElementById('urlInput').value = currentUrl;
+            log(`🌐 Remote URL: ${currentUrl}`);
         }
     } catch (err) {
         console.error(err);
@@ -76,7 +87,7 @@ async function fetchLatestState() {
 
 async function sendCommand(command) {
     if (!API_BASE) return;
-    log(`Sending command: ${JSON.stringify(command)}`);
+    log(`📤 Sending command: ${JSON.stringify(command)}`);
     document.getElementById('status').innerHTML = '⏳ Sending...';
 
     try {
@@ -122,7 +133,7 @@ async function sendCommand(command) {
         });
 
         document.getElementById('status').innerHTML = '🔄 Waiting for remote...';
-        log('Command pushed, waiting for remote execution...');
+        log('⏳ Command pushed, waiting for execution...');
 
         let attempts = 0;
         const interval = setInterval(async () => {
@@ -134,7 +145,7 @@ async function sendCommand(command) {
             }
         }, 2000);
     } catch (err) {
-        log(`ERROR sending command: ${err.message}`);
+        log(`❌ ERROR sending command: ${err.message}`);
         document.getElementById('status').innerHTML = '❌ Send failed';
     }
 }
@@ -181,6 +192,7 @@ function initEventListeners() {
     document.getElementById('copyLinkBtn').onclick = () => {
         const link = document.getElementById('linkDisplay').href;
         if (link && link !== '#') navigator.clipboard.writeText(link);
+        log(`📋 Copied "${link}" to local clipboard`);
     };
     document.getElementById('refreshBtn').onclick = () => fetchLatestState();
     document.getElementById('sendManualBtn').onclick = () => {
@@ -190,7 +202,6 @@ function initEventListeners() {
             sendCommand(cmd);
         } catch(e) { alert('Invalid JSON: ' + e.message); }
     };
-    // NEW: URL bar handler
     document.getElementById('goBtn').onclick = () => {
         let url = document.getElementById('urlInput').value.trim();
         if (!url) return;
@@ -198,6 +209,9 @@ function initEventListeners() {
             url = 'https://' + url;
         }
         sendCommand({ action: 'goto', url: url });
+    };
+    document.getElementById('manualScreenshotBtn').onclick = () => {
+        sendCommand({ action: 'screenshot' });
     };
 }
 
@@ -208,8 +222,8 @@ function initEventListeners() {
         initEventListeners();
         setInterval(fetchLatestState, 3000);
         await fetchLatestState();
-        log('Viewer started. Polling every 3s.');
+        log('✅ Viewer started. Polling every 3s.');
     } else {
-        log('Cannot start – create config.json from config.example.json');
+        log('❌ Cannot start – create config.json from config.example.json');
     }
 })();
