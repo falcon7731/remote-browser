@@ -1,5 +1,5 @@
-# Command: goto
-**Result:** Navigated to https://www.youtube.com/
+# Command: click-coordinates
+**Result:** Clicked at (487,28)
 
 **URL:** https://www.youtube.com/
 
