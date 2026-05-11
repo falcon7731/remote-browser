@@ -15,9 +15,10 @@ permissions:
 jobs:
   browse:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360               # 6 hours – GitHub's hard limit
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout session branch
+        uses: actions/checkout@v4
         with:
           ref: session
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -31,6 +32,11 @@ jobs:
         run: |
           pip install playwright pygithub
           playwright install chromium
+
+      - name: Configure git (required for commits)
+        run: |
+          git config --global user.email "runner@github-actions"
+          git config --global user.name "GitHub Actions"
 
       - name: Create persistent runner script
         run: |
@@ -68,8 +74,10 @@ jobs:
           def main():
               print(f"🚀 Persistent browser - max session: {MAX_HOURS} hours")
               
+              # Ensure we are on the correct branch
               subprocess.run(["git", "checkout", BRANCH], check=True)
               
+              # Load previous session
               session = {}
               if os.path.exists("session.json"):
                   with open("session.json", "r") as f:
@@ -82,6 +90,7 @@ jobs:
                   context = browser.new_context(viewport={"width": 1280, "height": 720})
                   page = context.new_page()
                   
+                  # Restore previous state
                   if session.get("cookies"):
                       context.add_cookies(session["cookies"])
                   if session.get("lastUrl") and session["lastUrl"] != "about:blank":
@@ -90,6 +99,7 @@ jobs:
                           page.evaluate("""(storage) => { for (let [k,v] of Object.entries(storage)) localStorage.setItem(k, v); }""", session["localStorage"])
                       page.evaluate(f"window.scrollTo(0, {session.get('scrollY', 0)})")
                   
+                  # Initial push
                   page.screenshot(path="screenshot.png", full_page=True)
                   write_file("page.html", page.content())
                   write_file("clipboard.txt", "")
@@ -101,6 +111,7 @@ jobs:
                   heartbeat = 0
                   
                   while True:
+                      # Check session time limit
                       if time.time() - START_TIME > MAX_HOURS * 3600:
                           print(f"Session time limit ({MAX_HOURS} hours) reached. Exiting.")
                           break
@@ -176,6 +187,7 @@ jobs:
                                   else:
                                       raise ValueError(f"Unknown action: {action}")
                                   
+                                  # Capture new state
                                   page.screenshot(path="screenshot.png", full_page=True)
                                   write_file("page.html", page.content())
                                   session["cookies"] = context.cookies()
@@ -183,11 +195,13 @@ jobs:
                                   session["lastUrl"] = page.url
                                   session["scrollY"] = page.evaluate("window.scrollY")
                                   write_file("session.json", json.dumps(session, indent=2))
+                                  
                                   links = page.evaluate("() => Array.from(document.querySelectorAll('a[href]')).map(a => a.href)")
                                   with open("results.md", "w") as f:
                                       f.write(f"# Command: {action}\n**Result:**\n{result}\n\n**URL:** {session['lastUrl']}\n\n## Links ({len(links)})\n")
                                       f.write("\n".join(f"- {l}" for l in links[:100]))
                                       f.write(f"\n\n![Screenshot](./screenshot.png)\n\n## Clipboard\n```\n{open('clipboard.txt').read()}\n```")
+                                  
                                   write_file("command.json", "{}")
                                   git_force_push_all()
                                   print("✅ Command executed and pushed")
