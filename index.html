@@ -10,18 +10,23 @@
 <div class="container">
     <div class="status-bar">
         <span class="status" id="status">🟡 Connecting...</span>
-        <span class="badge">Polling every 3s</span>
+        <span class="badge" id="tokenCounter">API: 0/5000</span>
         <div class="link-display">🔗 <a id="linkDisplay" href="#" target="_blank">—</a></div>
         <button id="copyLinkBtn">📋 Copy Link</button>
         <button id="refreshBtn">🔄 Refresh</button>
     </div>
 
     <div class="screenshot-area">
-        <img id="screenshot" alt="Remote browser view" title="Left click = click | Right click = right-click + copy link/text">
+        <img id="screenshot" alt="Remote browser view" title="Left click = click | Right click = right-click">
     </div>
 
     <div class="toolbar">
-        <input type="text" id="urlInput" placeholder="Enter URL (e.g., example.com)" style="flex: 2;">
+        <div style="flex:1; font-size:12px; color:#aaa;">Remote current URL:</div>
+        <input type="text" id="remoteUrlDisplay" readonly style="flex:3; background:#2a2a2a;" value="about:blank">
+    </div>
+
+    <div class="toolbar">
+        <input type="text" id="navUrlInput" placeholder="Enter URL to navigate" style="flex:2;">
         <button id="goBtn">🌐 Go</button>
         <button id="manualScreenshotBtn">📸 Screenshot Now</button>
     </div>
@@ -34,17 +39,17 @@
         <button id="scrollDownBtn">⬇ Scroll Down</button>
         <button id="copyRemoteClipboardBtn">📋 Get Remote Clipboard</button>
         <button id="setRemoteClipboardBtn">📤 Set Remote Clipboard</button>
-        <button id="stopBrowserBtn" class="danger">⏹️ Stop Remote Browser</button>
+        <button id="stopBrowserBtn" class="danger">⏹️ Stop</button>
     </div>
 
     <div class="toolbar">
-        <span>Manual command (JSON):</span>
+        <span>Manual JSON:</span>
         <textarea id="manualCommand" placeholder='{"action":"goto","url":"https://example.com"}'></textarea>
         <button id="sendManualBtn">📡 Send</button>
     </div>
 
     <div class="log" id="log">
-        📡 Ready. Click on screenshot to click remotely. Right-click to copy link/text.
+        📡 Ready. Left/right click on screenshot.
     </div>
 </div>
 <script src="script.js"></script>

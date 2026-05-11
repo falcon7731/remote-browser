@@ -1,35 +1,62 @@
-// ========== CONFIGURATION - CHANGE THESE ==========
+// ========== CONFIGURATION ==========
 let GITHUB_USER = "";
 let GITHUB_REPO = "";
 let GITHUB_TOKEN = "";
 const BRANCH = "session";
 let API_BASE = "";
-// =================================================
+let POLL_INTERVAL_MS = 5000;
+// ===================================
 
+let requestCount = 0;
+let lastResetTime = Date.now();
 let lastScreenshotSha = null;
 let lastClipboardText = "";
+let lastCommitSha = null;
+
+function updateTokenCounter() {
+    let now = Date.now();
+    if (now - lastResetTime >= 3600000) {
+        requestCount = 0;
+        lastResetTime = now;
+    }
+    document.getElementById('tokenCounter').innerText = `API: ${requestCount}/5000`;
+}
+
+async function apiFetch(url, options = {}) {
+    requestCount++;
+    updateTokenCounter();
+    const response = await fetch(url, {
+        ...options,
+        headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
+    });
+    if (response.status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
+        log("⚠️ Rate limit exceeded, waiting 60s");
+        await new Promise(r => setTimeout(r, 60000));
+        return apiFetch(url, options);
+    }
+    return response;
+}
 
 function log(msg) {
     const logDiv = document.getElementById('log');
     const timestamp = new Date().toLocaleTimeString();
     logDiv.innerHTML = `[${timestamp}] ${msg}\n` + logDiv.innerHTML;
-    // Keep last 50 lines
-    if (logDiv.children.length > 100) logDiv.innerHTML = logDiv.innerHTML.slice(0, 2000);
+    if (logDiv.children.length > 200) logDiv.innerHTML = logDiv.innerHTML.slice(0, 5000);
 }
 
 async function loadConfig() {
     try {
-        const response = await fetch('config.json');
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const config = await response.json();
-        GITHUB_USER = config.github_user;
-        GITHUB_REPO = config.github_repo;
-        GITHUB_TOKEN = config.github_token;
+        const resp = await fetch('config.json');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const cfg = await resp.json();
+        GITHUB_USER = cfg.github_user;
+        GITHUB_REPO = cfg.github_repo;
+        GITHUB_TOKEN = cfg.github_token;
         API_BASE = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}`;
-        log(`✅ Config loaded – user: ${GITHUB_USER}, repo: ${GITHUB_REPO}`);
+        log(`✅ Config: ${GITHUB_USER}/${GITHUB_REPO}`);
         return true;
     } catch (err) {
-        log(`❌ Failed to load config.json: ${err.message}`);
+        log(`❌ config.json missing: ${err.message}`);
         document.getElementById('status').innerHTML = '⚠️ Missing config.json';
         return false;
     }
@@ -38,20 +65,24 @@ async function loadConfig() {
 async function fetchLatestState() {
     if (!API_BASE) return;
     try {
-        const refRes = await fetch(`${API_BASE}/git/ref/heads/${BRANCH}`, {
-            headers: { Authorization: `token ${GITHUB_TOKEN}` }
-        });
-        if (!refRes.ok) throw new Error(`Branch fetch failed: ${refRes.status}`);
+        const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
+        if (!refRes.ok) throw new Error(`Branch fetch failed ${refRes.status}`);
         const refData = await refRes.json();
         const commitSha = refData.object.sha;
 
-        const treeRes = await fetch(`${API_BASE}/git/trees/${commitSha}?recursive=1`, {
-            headers: { Authorization: `token ${GITHUB_TOKEN}` }
-        });
+        if (commitSha === lastCommitSha) {
+            // no change, skip heavy fetch
+            return;
+        }
+        lastCommitSha = commitSha;
+
+        const treeRes = await apiFetch(`${API_BASE}/git/trees/${commitSha}?recursive=1`);
         const treeData = await treeRes.json();
-        const screenshotItem = treeData.tree.find(f => f.path === 'screenshot.png');
-        const clipboardItem = treeData.tree.find(f => f.path === 'clipboard.txt');
-        const urlItem = treeData.tree.find(f => f.path === 'current_url.txt');
+        const files = treeData.tree;
+
+        const screenshotItem = files.find(f => f.path === 'screenshot.png');
+        const clipboardItem = files.find(f => f.path === 'clipboard.txt');
+        const urlItem = files.find(f => f.path === 'current_url.txt');
 
         if (screenshotItem && screenshotItem.sha !== lastScreenshotSha) {
             lastScreenshotSha = screenshotItem.sha;
@@ -66,16 +97,17 @@ async function fetchLatestState() {
             const clipText = await clipRes.text();
             if (clipText !== lastClipboardText) {
                 lastClipboardText = clipText;
-                document.getElementById('linkDisplay').innerText = clipText.substring(0, 70) || '(empty)';
+                document.getElementById('linkDisplay').innerText = clipText.substring(0,70) || '(empty)';
                 document.getElementById('linkDisplay').href = clipText.startsWith('http') ? clipText : '#';
-                log(`📋 Remote clipboard: ${clipText.substring(0, 100)}`);
+                log(`📋 Clipboard: ${clipText.substring(0,100)}`);
             }
         }
 
         if (urlItem) {
             const urlRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/current_url.txt?cache=${Date.now()}`);
             const currentUrl = await urlRes.text();
-            document.getElementById('urlInput').value = currentUrl;
+            // Update read‑only display, NOT the navigation input
+            document.getElementById('remoteUrlDisplay').value = currentUrl;
             log(`🌐 Remote URL: ${currentUrl}`);
         }
     } catch (err) {
@@ -87,27 +119,23 @@ async function fetchLatestState() {
 
 async function sendCommand(command) {
     if (!API_BASE) return;
-    log(`📤 Sending command: ${JSON.stringify(command)}`);
+    log(`📤 ${JSON.stringify(command)}`);
     document.getElementById('status').innerHTML = '⏳ Sending...';
 
     try {
-        const refRes = await fetch(`${API_BASE}/git/ref/heads/${BRANCH}`, {
-            headers: { Authorization: `token ${GITHUB_TOKEN}` }
-        });
+        const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
         const refData = await refRes.json();
         const baseSha = refData.object.sha;
 
-        const commandContent = JSON.stringify(command, null, 2);
-        const blobRes = await fetch(`${API_BASE}/git/blobs`, {
+        const cmdContent = JSON.stringify(command, null, 2);
+        const blobRes = await apiFetch(`${API_BASE}/git/blobs`, {
             method: 'POST',
-            headers: { Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: btoa(commandContent), encoding: 'base64' })
+            body: JSON.stringify({ content: btoa(cmdContent), encoding: 'base64' })
         });
         const blobData = await blobRes.json();
 
-        const treeRes = await fetch(`${API_BASE}/git/trees`, {
+        const treeRes = await apiFetch(`${API_BASE}/git/trees`, {
             method: 'POST',
-            headers: { Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 base_tree: baseSha,
                 tree: [{ path: 'command.json', mode: '100644', type: 'blob', sha: blobData.sha }]
@@ -115,38 +143,36 @@ async function sendCommand(command) {
         });
         const newTree = await treeRes.json();
 
-        const commitRes = await fetch(`${API_BASE}/git/commits`, {
+        const commitRes = await apiFetch(`${API_BASE}/git/commits`, {
             method: 'POST',
-            headers: { Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                message: `Local command: ${command.action}`,
+                message: `Cmd: ${command.action}`,
                 tree: newTree.sha,
                 parents: [baseSha]
             })
         });
         const newCommit = await commitRes.json();
 
-        await fetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
+        await apiFetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
             method: 'PATCH',
-            headers: { Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ sha: newCommit.sha, force: true })
         });
 
-        document.getElementById('status').innerHTML = '🔄 Waiting for remote...';
-        log('⏳ Command pushed, waiting for execution...');
+        document.getElementById('status').innerHTML = '🔄 Waiting...';
+        log('Command pushed');
 
         let attempts = 0;
         const interval = setInterval(async () => {
             attempts++;
             await fetchLatestState();
-            if (attempts >= 20) {
+            if (attempts >= 8) {
                 clearInterval(interval);
-                document.getElementById('status').innerHTML = '✅ Done (may still be processing)';
+                document.getElementById('status').innerHTML = '✅ Done';
             }
-        }, 2000);
+        }, 5000);
     } catch (err) {
-        log(`❌ ERROR sending command: ${err.message}`);
-        document.getElementById('status').innerHTML = '❌ Send failed';
+        log(`❌ Send error: ${err.message}`);
+        document.getElementById('status').innerHTML = '❌ Failed';
     }
 }
 
@@ -157,9 +183,8 @@ function initEventListeners() {
         const scaleY = e.target.naturalHeight / rect.height;
         const x = (e.clientX - rect.left) * scaleX;
         const y = (e.clientY - rect.top) * scaleY;
-        if (confirm(`Click at (${Math.round(x)}, ${Math.round(y)})?`)) {
+        if (confirm(`Click at (${Math.round(x)}, ${Math.round(y)})?`))
             sendCommand({ action: 'click-coordinates', x: Math.round(x), y: Math.round(y) });
-        }
     });
 
     document.getElementById('screenshot').addEventListener('contextmenu', (e) => {
@@ -172,8 +197,15 @@ function initEventListeners() {
         sendCommand({ action: 'rightclick-coordinates', x: Math.round(x), y: Math.round(y) });
     });
 
+    document.getElementById('goBtn').onclick = () => {
+        let url = document.getElementById('navUrlInput').value.trim();
+        if (!url) return;
+        if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
+        sendCommand({ action: 'goto', url: url });
+    };
+    document.getElementById('manualScreenshotBtn').onclick = () => sendCommand({ action: 'screenshot' });
     document.getElementById('typeBtn').onclick = () => {
-        const text = document.getElementById('typeText').value;
+        let text = document.getElementById('typeText').value;
         if (text) sendCommand({ action: 'type', text: text });
     };
     document.getElementById('enterBtn').onclick = () => sendCommand({ action: 'press', key: 'Enter' });
@@ -181,49 +213,32 @@ function initEventListeners() {
     document.getElementById('scrollDownBtn').onclick = () => sendCommand({ action: 'scroll', text: '200' });
     document.getElementById('copyRemoteClipboardBtn').onclick = () => sendCommand({ action: 'get-clipboard' });
     document.getElementById('setRemoteClipboardBtn').onclick = () => {
-        const txt = prompt('Enter text to copy to remote clipboard:');
+        let txt = prompt('Enter text to copy to remote clipboard:');
         if (txt !== null) sendCommand({ action: 'set-clipboard', text: txt });
     };
     document.getElementById('stopBrowserBtn').onclick = () => {
-        if (confirm('Stop the remote browser? This will end the GitHub Actions job.')) {
-            sendCommand({ action: 'stop' });
-        }
+        if (confirm('Stop remote browser?')) sendCommand({ action: 'stop' });
     };
     document.getElementById('copyLinkBtn').onclick = () => {
         const link = document.getElementById('linkDisplay').href;
         if (link && link !== '#') navigator.clipboard.writeText(link);
-        log(`📋 Copied "${link}" to local clipboard`);
+        log(`Copied link: ${link}`);
     };
     document.getElementById('refreshBtn').onclick = () => fetchLatestState();
     document.getElementById('sendManualBtn').onclick = () => {
-        const raw = document.getElementById('manualCommand').value;
         try {
-            const cmd = JSON.parse(raw);
+            let cmd = JSON.parse(document.getElementById('manualCommand').value);
             sendCommand(cmd);
-        } catch(e) { alert('Invalid JSON: ' + e.message); }
-    };
-    document.getElementById('goBtn').onclick = () => {
-        let url = document.getElementById('urlInput').value.trim();
-        if (!url) return;
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-            url = 'https://' + url;
-        }
-        sendCommand({ action: 'goto', url: url });
-    };
-    document.getElementById('manualScreenshotBtn').onclick = () => {
-        sendCommand({ action: 'screenshot' });
+        } catch(e) { alert('Invalid JSON'); }
     };
 }
 
 // Start
 (async function start() {
-    const configLoaded = await loadConfig();
-    if (configLoaded) {
+    if (await loadConfig()) {
         initEventListeners();
-        setInterval(fetchLatestState, 3000);
+        setInterval(fetchLatestState, POLL_INTERVAL_MS);
         await fetchLatestState();
-        log('✅ Viewer started. Polling every 3s.');
-    } else {
-        log('❌ Cannot start – create config.json from config.example.json');
+        log(`✅ Started. Polling every ${POLL_INTERVAL_MS/1000}s`);
     }
 })();
