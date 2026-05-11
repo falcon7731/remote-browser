@@ -7,31 +7,37 @@ let API_BASE = "";
 let POLL_INTERVAL_MS = 5000;  // 5 seconds
 // =============================================================
 
+let requestCount = 0;
+let lastResetTime = Date.now();
 let lastScreenshotSha = null;
 let lastClipboardText = "";
 let lastCommitSha = null;
 
-function log(msg) {
-    const logDiv = document.getElementById('log');
-    const timestamp = new Date().toLocaleTimeString();
-    logDiv.innerHTML = `[${timestamp}] ${msg}\n` + logDiv.innerHTML;
-    if (logDiv.children.length > 200) logDiv.innerHTML = logDiv.innerHTML.slice(0, 5000);
+// Helper to generate unique command ID
+function generateCommandId() {
+    return Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+}
+
+function updateTokenCounter(remaining) {
+    // If remaining is provided from response headers, use it; otherwise show request count.
+    if (remaining !== undefined) {
+        document.getElementById('tokenCounter').innerText = `API: ${remaining}/5000`;
+    } else {
+        document.getElementById('tokenCounter').innerText = `API: ${requestCount}/5000 (est)`;
+    }
 }
 
 async function apiFetch(url, options = {}) {
+    requestCount++;
+    updateTokenCounter();
     const response = await fetch(url, {
         ...options,
         headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
     });
-    // Update rate limit display from response headers
+    // Read rate limit from headers
     const remaining = response.headers.get('X-RateLimit-Remaining');
-    const limit = response.headers.get('X-RateLimit-Limit');
-    if (remaining !== null && limit !== null) {
-        document.getElementById('tokenCounter').innerText = `API: ${remaining}/${limit}`;
-    } else {
-        // fallback: increment counter manually (less accurate)
-        let current = parseInt(document.getElementById('tokenCounter').innerText.split(':')[1]?.split('/')[0]?.trim() || "0");
-        document.getElementById('tokenCounter').innerText = `API: ${current+1}/?`;
+    if (remaining) {
+        updateTokenCounter(parseInt(remaining));
     }
     if (response.status === 403 && remaining === '0') {
         log("⚠️ API rate limit exceeded! Waiting 60 seconds...");
@@ -39,6 +45,13 @@ async function apiFetch(url, options = {}) {
         return apiFetch(url, options);
     }
     return response;
+}
+
+function log(msg) {
+    const logDiv = document.getElementById('log');
+    const timestamp = new Date().toLocaleTimeString();
+    logDiv.innerHTML = `[${timestamp}] ${msg}\n` + logDiv.innerHTML;
+    if (logDiv.children.length > 200) logDiv.innerHTML = logDiv.innerHTML.slice(0, 5000);
 }
 
 async function loadConfig() {
@@ -67,7 +80,7 @@ async function fetchLatestState() {
         const refData = await refRes.json();
         const commitSha = refData.object.sha;
 
-        if (commitSha === lastCommitSha) return; // no change
+        if (commitSha === lastCommitSha) return;
         lastCommitSha = commitSha;
 
         const treeRes = await apiFetch(`${API_BASE}/git/trees/${commitSha}?recursive=1`);
@@ -112,7 +125,9 @@ async function fetchLatestState() {
 
 async function sendCommand(command) {
     if (!API_BASE) return;
-    log(`📤 Sending command: ${JSON.stringify(command)}`);
+    // Add a unique ID to the command to prevent duplicate execution
+    const commandWithId = { ...command, id: generateCommandId() };
+    log(`📤 Sending command: ${JSON.stringify(commandWithId)}`);
     document.getElementById('status').innerHTML = '⏳ Sending...';
 
     try {
@@ -122,7 +137,7 @@ async function sendCommand(command) {
         const baseSha = refData.object.sha;
         log(`Current commit SHA: ${baseSha}`);
 
-        const cmdContent = JSON.stringify(command, null, 2);
+        const cmdContent = JSON.stringify(commandWithId, null, 2);
         const blobRes = await apiFetch(`${API_BASE}/git/blobs`, {
             method: 'POST',
             body: JSON.stringify({ content: btoa(cmdContent), encoding: 'base64' })
@@ -231,7 +246,6 @@ function initEventListeners() {
     };
 }
 
-// Initialize
 (async function start() {
     if (await loadConfig()) {
         initEventListeners();

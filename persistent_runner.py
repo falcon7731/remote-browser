@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import os
-import sys
 import json
 import time
-import hashlib
 import subprocess
 import traceback
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -19,15 +17,15 @@ def log(msg):
     with open("remote.log", "a") as f:
         f.write(full + "\n")
 
-def git_fetch_hard_reset():
-    """Fetch latest from origin and reset local branch to match exactly."""
+def git_sync():
+    """Fetch remote and reset hard to origin/session to get latest command."""
     try:
         subprocess.run(["git", "fetch", "origin", BRANCH], check=True, capture_output=True)
         subprocess.run(["git", "reset", "--hard", f"origin/{BRANCH}"], check=True, capture_output=True)
         log("git sync successful (fetch + reset)")
         return True
     except subprocess.CalledProcessError as e:
-        log(f"git sync failed: {e.stderr.decode() if e.stderr else str(e)}")
+        log(f"git sync failed: {e}")
         return False
 
 def git_force_push():
@@ -36,22 +34,13 @@ def git_force_push():
     subprocess.run(["git", "push", "origin", BRANCH, "--force"], check=True)
 
 def read_command():
-    # Ensure we have latest command.json from remote before reading
-    git_fetch_hard_reset()
-    cmd_path = "command.json"
-    if not os.path.exists(cmd_path):
-        return {}
     try:
-        with open(cmd_path, "r") as f:
-            content = f.read()
-            if not content.strip():
-                return {}
-            cmd = json.loads(content)
+        with open("command.json", "r") as f:
+            cmd = json.load(f)
             if cmd.get("action"):
-                log(f"Read command: {cmd['action']} with data: {cmd}")
+                log(f"Read command: {cmd['action']} (id: {cmd.get('id', 'no-id')})")
             return cmd
-    except Exception as e:
-        log(f"Error reading command.json: {e}")
+    except:
         return {}
 
 def write_file(path, content):
@@ -61,10 +50,9 @@ def write_file(path, content):
 
 def main():
     log("🚀 Persistent browser starting")
-    log(f"Current working directory: {os.getcwd()}")
-    subprocess.run(["git", "checkout", BRANCH], check=True)
-    log(f"Checked out {BRANCH}")
+    git_sync()  # initial sync
 
+    # Load session
     session = {}
     if os.path.exists("session.json"):
         with open("session.json") as f:
@@ -81,6 +69,7 @@ def main():
         page = context.new_page()
         log("Browser launched")
 
+        # Restore cookies and URL
         if session.get("cookies"):
             context.add_cookies(session["cookies"])
             log(f"Restored {len(session['cookies'])} cookies")
@@ -91,6 +80,7 @@ def main():
                 page.evaluate("""(storage) => { for(let [k,v] of Object.entries(storage)) localStorage.setItem(k,v); }""", session["localStorage"])
                 log("Restored localStorage")
             page.evaluate(f"window.scrollTo(0, {session.get('scrollY',0)})")
+            log(f"Scrolled to Y={session.get('scrollY',0)}")
 
         # Initial capture and push
         log("Taking initial screenshot...")
@@ -104,10 +94,11 @@ def main():
         git_force_push()
         log("✅ Initial state pushed")
 
-        last_cmd_hash = ""
+        last_command_id = None
         heartbeat = 0
 
         while True:
+            # Check time limit
             if time.time() - START_TIME > MAX_HOURS * 3600:
                 log("Time limit reached, exiting")
                 break
@@ -116,12 +107,16 @@ def main():
             if heartbeat % 30 == 0:
                 log(f"Heartbeat | URL: {page.url} | uptime: {int(time.time()-START_TIME)}s")
 
+            # Sync with remote once per iteration
+            git_sync()
+
             cmd = read_command()
             if cmd and cmd.get("action"):
-                cmd_hash = hashlib.md5(json.dumps(cmd).encode()).hexdigest()
-                if cmd_hash != last_cmd_hash:
-                    last_cmd_hash = cmd_hash
-                    log(f"📩 Executing command: {cmd['action']}")
+                cmd_id = cmd.get("id")
+                # Execute only if this command hasn't been seen before
+                if cmd_id and cmd_id != last_command_id:
+                    last_command_id = cmd_id
+                    log(f"📩 Executing command: {cmd['action']} (id: {cmd_id})")
                     try:
                         action = cmd["action"]
                         if action == "goto":
@@ -187,7 +182,7 @@ def main():
                         else:
                             raise ValueError(f"Unknown action: {action}")
 
-                        # Post‑command capture
+                        # Capture post‑command state
                         log("Capturing post‑command state...")
                         page.screenshot(path="screenshot.png", full_page=True)
                         write_file("page.html", page.content())
@@ -204,6 +199,7 @@ def main():
                             f.write("\n".join(f"- {l}" for l in links[:100]))
                             f.write(f"\n\n![Screenshot](./screenshot.png)\n\n## Clipboard\n```\n{open('clipboard.txt').read()}\n```")
 
+                        # Clear command.json to prevent re‑execution
                         write_file("command.json", "{}")
                         git_force_push()
                         log(f"✅ {action} completed and pushed")
@@ -216,7 +212,9 @@ def main():
                         log(f"❌ Command error: {e}\n{traceback.format_exc()}")
                         write_file("results.md", f"# Error\n```\n{e}\n{traceback.format_exc()}\n```")
                         git_force_push()
-
+                else:
+                    if cmd_id:
+                        log(f"Skipping already executed command id: {cmd_id}")
             time.sleep(1)
 
         browser.close()
