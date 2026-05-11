@@ -139,7 +139,6 @@ async function sendCommand(command) {
     }
 }
 
-// Event listeners (identical to before, but functions are defined)
 function initEventListeners() {
     document.getElementById('screenshot').addEventListener('click', (e) => {
         const rect = e.target.getBoundingClientRect();
@@ -190,6 +189,15 @@ function initEventListeners() {
             const cmd = JSON.parse(raw);
             sendCommand(cmd);
         } catch(e) { alert('Invalid JSON: ' + e.message); }
+    };
+    // NEW: URL bar handler
+    document.getElementById('goBtn').onclick = () => {
+        let url = document.getElementById('urlInput').value.trim();
+        if (!url) return;
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            url = 'https://' + url;
+        }
+        sendCommand({ action: 'goto', url: url });
     };
 }
 
