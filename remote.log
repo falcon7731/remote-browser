@@ -7,3 +7,11 @@
 [2026-05-11 13:10:50] Wrote current_url.txt
 [2026-05-11 13:10:50] Wrote session.json
 [2026-05-11 13:10:50] Wrote command.json
+[2026-05-11 13:11:46] Read command: goto (id: 1778505013621-esrz3y79)
+[2026-05-11 13:11:46] 📩 Executing: goto (id: 1778505013621-esrz3y79)
+[2026-05-11 13:11:46] Navigating to https://www.youtube.com/
+[2026-05-11 13:11:47] Capturing post‑command state...
+[2026-05-11 13:11:47] Wrote page.html
+[2026-05-11 13:11:47] Wrote current_url.txt
+[2026-05-11 13:11:47] Wrote session.json
+[2026-05-11 13:11:47] Wrote command.json
