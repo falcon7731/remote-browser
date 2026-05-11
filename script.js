@@ -1,11 +1,11 @@
-// ========== CONFIGURATION ==========
+// ========== CONFIGURATION - DO NOT HARDCODE SECRETS ==========
 let GITHUB_USER = "";
 let GITHUB_REPO = "";
 let GITHUB_TOKEN = "";
 const BRANCH = "session";
 let API_BASE = "";
-let POLL_INTERVAL_MS = 5000;
-// ===================================
+let POLL_INTERVAL_MS = 5000;  // 5 seconds
+// =============================================================
 
 let requestCount = 0;
 let lastResetTime = Date.now();
@@ -30,8 +30,8 @@ async function apiFetch(url, options = {}) {
         headers: { Authorization: `token ${GITHUB_TOKEN}`, ...options.headers }
     });
     if (response.status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
-        log("⚠️ Rate limit exceeded, waiting 60s");
-        await new Promise(r => setTimeout(r, 60000));
+        log("⚠️ Rate limit exceeded, waiting 60 seconds...");
+        await new Promise(resolve => setTimeout(resolve, 60000));
         return apiFetch(url, options);
     }
     return response;
@@ -53,10 +53,10 @@ async function loadConfig() {
         GITHUB_REPO = cfg.github_repo;
         GITHUB_TOKEN = cfg.github_token;
         API_BASE = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}`;
-        log(`✅ Config: ${GITHUB_USER}/${GITHUB_REPO}`);
+        log(`✅ Config loaded – ${GITHUB_USER}/${GITHUB_REPO}`);
         return true;
     } catch (err) {
-        log(`❌ config.json missing: ${err.message}`);
+        log(`❌ Failed to load config.json: ${err.message}`);
         document.getElementById('status').innerHTML = '⚠️ Missing config.json';
         return false;
     }
@@ -66,14 +66,11 @@ async function fetchLatestState() {
     if (!API_BASE) return;
     try {
         const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
-        if (!refRes.ok) throw new Error(`Branch fetch failed ${refRes.status}`);
+        if (!refRes.ok) throw new Error(`Branch fetch failed: ${refRes.status}`);
         const refData = await refRes.json();
         const commitSha = refData.object.sha;
 
-        if (commitSha === lastCommitSha) {
-            // no change, skip heavy fetch
-            return;
-        }
+        if (commitSha === lastCommitSha) return; // no change
         lastCommitSha = commitSha;
 
         const treeRes = await apiFetch(`${API_BASE}/git/trees/${commitSha}?recursive=1`);
@@ -97,16 +94,15 @@ async function fetchLatestState() {
             const clipText = await clipRes.text();
             if (clipText !== lastClipboardText) {
                 lastClipboardText = clipText;
-                document.getElementById('linkDisplay').innerText = clipText.substring(0,70) || '(empty)';
+                document.getElementById('linkDisplay').innerText = clipText.substring(0, 70) || '(empty)';
                 document.getElementById('linkDisplay').href = clipText.startsWith('http') ? clipText : '#';
-                log(`📋 Clipboard: ${clipText.substring(0,100)}`);
+                log(`📋 Clipboard: ${clipText.substring(0, 100)}`);
             }
         }
 
         if (urlItem) {
             const urlRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/current_url.txt?cache=${Date.now()}`);
             const currentUrl = await urlRes.text();
-            // Update read‑only display, NOT the navigation input
             document.getElementById('remoteUrlDisplay').value = currentUrl;
             log(`🌐 Remote URL: ${currentUrl}`);
         }
@@ -119,14 +115,18 @@ async function fetchLatestState() {
 
 async function sendCommand(command) {
     if (!API_BASE) return;
-    log(`📤 ${JSON.stringify(command)}`);
+    log(`📤 Sending command: ${JSON.stringify(command)}`);
     document.getElementById('status').innerHTML = '⏳ Sending...';
 
     try {
+        // Get current commit SHA
         const refRes = await apiFetch(`${API_BASE}/git/ref/heads/${BRANCH}`);
+        if (!refRes.ok) throw new Error(`Get ref failed: ${refRes.status}`);
         const refData = await refRes.json();
         const baseSha = refData.object.sha;
+        log(`Current commit SHA: ${baseSha}`);
 
+        // Create blob for command.json
         const cmdContent = JSON.stringify(command, null, 2);
         const blobRes = await apiFetch(`${API_BASE}/git/blobs`, {
             method: 'POST',
@@ -134,6 +134,7 @@ async function sendCommand(command) {
         });
         const blobData = await blobRes.json();
 
+        // Create new tree
         const treeRes = await apiFetch(`${API_BASE}/git/trees`, {
             method: 'POST',
             body: JSON.stringify({
@@ -143,23 +144,27 @@ async function sendCommand(command) {
         });
         const newTree = await treeRes.json();
 
+        // Create commit
         const commitRes = await apiFetch(`${API_BASE}/git/commits`, {
             method: 'POST',
             body: JSON.stringify({
-                message: `Cmd: ${command.action}`,
+                message: `Local command: ${command.action}`,
                 tree: newTree.sha,
                 parents: [baseSha]
             })
         });
         const newCommit = await commitRes.json();
 
-        await apiFetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
+        // Force update branch
+        const updateRes = await apiFetch(`${API_BASE}/git/refs/heads/${BRANCH}`, {
             method: 'PATCH',
             body: JSON.stringify({ sha: newCommit.sha, force: true })
         });
+        if (!updateRes.ok) throw new Error(`Update branch failed: ${updateRes.status}`);
+        log(`Branch ${BRANCH} force‑updated to commit ${newCommit.sha.substring(0,7)}`);
 
-        document.getElementById('status').innerHTML = '🔄 Waiting...';
-        log('Command pushed');
+        document.getElementById('status').innerHTML = '🔄 Waiting for remote...';
+        log('Command pushed, waiting for execution...');
 
         let attempts = 0;
         const interval = setInterval(async () => {
@@ -177,6 +182,7 @@ async function sendCommand(command) {
 }
 
 function initEventListeners() {
+    // Click on screenshot (left click)
     document.getElementById('screenshot').addEventListener('click', (e) => {
         const rect = e.target.getBoundingClientRect();
         const scaleX = e.target.naturalWidth / rect.width;
@@ -187,6 +193,7 @@ function initEventListeners() {
             sendCommand({ action: 'click-coordinates', x: Math.round(x), y: Math.round(y) });
     });
 
+    // Right‑click on screenshot
     document.getElementById('screenshot').addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const rect = e.target.getBoundingClientRect();
@@ -200,7 +207,8 @@ function initEventListeners() {
     document.getElementById('goBtn').onclick = () => {
         let url = document.getElementById('navUrlInput').value.trim();
         if (!url) return;
-        if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
+        if (!url.startsWith('http://') && !url.startsWith('https://'))
+            url = 'https://' + url;
         sendCommand({ action: 'goto', url: url });
     };
     document.getElementById('manualScreenshotBtn').onclick = () => sendCommand({ action: 'screenshot' });
@@ -217,28 +225,30 @@ function initEventListeners() {
         if (txt !== null) sendCommand({ action: 'set-clipboard', text: txt });
     };
     document.getElementById('stopBrowserBtn').onclick = () => {
-        if (confirm('Stop remote browser?')) sendCommand({ action: 'stop' });
+        if (confirm('Stop the remote browser?')) sendCommand({ action: 'stop' });
     };
     document.getElementById('copyLinkBtn').onclick = () => {
         const link = document.getElementById('linkDisplay').href;
         if (link && link !== '#') navigator.clipboard.writeText(link);
-        log(`Copied link: ${link}`);
+        log(`📋 Copied link to local clipboard: ${link}`);
     };
     document.getElementById('refreshBtn').onclick = () => fetchLatestState();
     document.getElementById('sendManualBtn').onclick = () => {
         try {
             let cmd = JSON.parse(document.getElementById('manualCommand').value);
             sendCommand(cmd);
-        } catch(e) { alert('Invalid JSON'); }
+        } catch(e) { alert('Invalid JSON: ' + e.message); }
     };
 }
 
-// Start
+// Initialize
 (async function start() {
     if (await loadConfig()) {
         initEventListeners();
         setInterval(fetchLatestState, POLL_INTERVAL_MS);
         await fetchLatestState();
-        log(`✅ Started. Polling every ${POLL_INTERVAL_MS/1000}s`);
+        log(`✅ Viewer started. Polling every ${POLL_INTERVAL_MS/1000}s. Token limit: 5000/hour.`);
+    } else {
+        log('❌ Cannot start – create config.json from config.example.json');
     }
 })();

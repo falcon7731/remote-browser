@@ -1,111 +1,18 @@
-* {
-    box-sizing: border-box;
-}
-body {
-    background: #0a0a0a;
-    color: #eee;
-    font-family: 'Segoe UI', monospace;
-    margin: 0;
-    padding: 20px;
-}
-.container {
-    max-width: 1400px;
-    margin: 0 auto;
-}
-.status-bar {
-    background: #1e1e1e;
-    padding: 12px 20px;
-    border-radius: 12px;
-    margin-bottom: 20px;
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    align-items: center;
-    font-size: 14px;
-    border: 1px solid #333;
-}
-.status {
-    color: #0f0;
-    font-weight: bold;
-}
-.link-display {
-    background: #2a2a2a;
-    padding: 6px 12px;
-    border-radius: 8px;
-    word-break: break-all;
-    flex: 1;
-}
-button {
-    background: #2a6;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    color: white;
-    font-weight: bold;
-    transition: 0.1s;
-}
-button:hover {
-    background: #3a8;
-}
-button.danger {
-    background: #a44;
-}
-button.danger:hover {
-    background: #c66;
-}
-.screenshot-area {
-    background: #111;
-    border-radius: 12px;
-    border: 1px solid #333;
-    overflow: auto;
-    text-align: center;
-    margin-bottom: 20px;
-}
-#screenshot {
-    max-width: 100%;
-    cursor: crosshair;
-    user-select: none;
-}
-.toolbar {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 20px;
-    background: #1e1e1e;
-    padding: 12px 20px;
-    border-radius: 12px;
-    align-items: center;
-}
-.toolbar input, .toolbar textarea {
-    background: #2a2a2a;
-    color: white;
-    border: 1px solid #555;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-family: monospace;
-}
-.toolbar input {
-    width: 250px;
-}
-.toolbar textarea {
-    width: 300px;
-    height: 60px;
-}
-.log {
-    background: #111;
-    border: 1px solid #333;
-    border-radius: 12px;
-    padding: 16px;
-    font-family: monospace;
-    font-size: 12px;
-    white-space: pre-wrap;
-    max-height: 300px;
-    overflow-y: auto;
-}
-.badge {
-    background: #2a6;
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 12px;
-}
+* { box-sizing: border-box; }
+body { background: #0a0a0a; color: #eee; font-family: 'Segoe UI', monospace; margin: 0; padding: 20px; }
+.container { max-width: 1400px; margin: 0 auto; }
+.status-bar { background: #1e1e1e; padding: 12px 20px; border-radius: 12px; margin-bottom: 20px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; font-size: 14px; border: 1px solid #333; }
+.status { color: #0f0; font-weight: bold; }
+.link-display { background: #2a2a2a; padding: 6px 12px; border-radius: 8px; word-break: break-all; flex: 1; }
+button { background: #2a6; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; color: white; font-weight: bold; transition: 0.1s; }
+button:hover { background: #3a8; }
+button.danger { background: #a44; }
+button.danger:hover { background: #c66; }
+.screenshot-area { background: #111; border-radius: 12px; border: 1px solid #333; overflow: auto; text-align: center; margin-bottom: 20px; }
+#screenshot { max-width: 100%; cursor: crosshair; user-select: none; }
+.toolbar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; background: #1e1e1e; padding: 12px 20px; border-radius: 12px; align-items: center; }
+.toolbar input, .toolbar textarea { background: #2a2a2a; color: white; border: 1px solid #555; padding: 8px 12px; border-radius: 8px; font-family: monospace; }
+.toolbar input { width: 250px; }
+.toolbar textarea { width: 300px; height: 60px; }
+.log { background: #111; border: 1px solid #333; border-radius: 12px; padding: 16px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+.badge { background: #2a6; padding: 4px 10px; border-radius: 20px; font-size: 12px; }

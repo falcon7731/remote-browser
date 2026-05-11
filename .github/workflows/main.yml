@@ -43,6 +43,6 @@ jobs:
           chmod +x persistent_runner.py
 
       - name: Run persistent browser
-        run: python persistent_runner.py
+        run: python -u persistent_runner.py
         env:
           SESSION_HOURS: ${{ github.event.inputs.session_hours }}
